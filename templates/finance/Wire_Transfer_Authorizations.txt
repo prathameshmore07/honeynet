@@ -1,0 +1,28 @@
+================================================================================
+APEX DYNAMICS CORP. - STANDING WIRE TRANSFER AUTHORIZATIONS (SWIFT / FEDWIRE)
+INTERNAL TREASURY PROTOCOL v4.2 - CONFIDENTIAL
+================================================================================
+
+Authorized Dual-Key Initiators: Marcus Brody (CFO), Elena Vance (CEO)
+
+Standing Recurring Wire Accounts:
+1. Vendor: Equinix Data Centers Inc.
+   Beneficiary Bank: Bank of America, N.A.
+   SWIFT: BOFAUS3N
+   ABA Routing: 111000012
+   Account: 94810294812
+   Monthly Cap: $250,000.00
+   Purpose: Tier-3 Colocation & Dark Fiber Cross-Connects
+
+2. Vendor: TensorFlow Compute Services Ireland Ltd.
+   Beneficiary Bank: Barclays Bank PLC (London)
+   IBAN: GB29BARC20000098765432
+   SWIFT: BARCGB22
+   Quarterly Cap: $1,200,000.00
+   Purpose: GPU Cluster Leasing
+
+3. Emergency Treasury Sweep:
+   Destination: Apex Treasury Vault LLC (Cayman)
+   SWIFT: CAYMKYKX
+   Account: 009-881-229-1
+   Limit: $5,000,000.00 (Requires Physical RSA Token Key)

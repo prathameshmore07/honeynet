@@ -1,0 +1,16 @@
+{
+  "database": "core_production",
+  "engine": "PostgreSQL 16.2",
+  "primary_host": "10.0.4.12",
+  "replica_hosts": ["10.0.4.13", "10.0.4.14"],
+  "tables": [
+    "users",
+    "oauth_tokens",
+    "api_credentials",
+    "audit_logs",
+    "payroll_records",
+    "wire_approvals"
+  ],
+  "ssl_mode": "verify-full",
+  "last_snapshot": "2026-02-10T04:00:00Z"
+}

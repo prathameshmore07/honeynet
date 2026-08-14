@@ -1,0 +1,24 @@
+================================================================================
+APEX DYNAMICS CORP. - ORGANIZATIONAL STRUCTURE (Q1 2026)
+CLASSIFICATION: INTERNAL RESTRICTED
+================================================================================
+
+[BOARD OF DIRECTORS]
+  └── Elena Vance (Chief Executive Officer)
+        ├── Marcus Brody (Chief Financial Officer)
+        │     ├── Accounting Team (3)
+        │     └── Treasury & Payroll (2)
+        ├── Devon Chen (VP of Engineering)
+        │     ├── Sarah Al-Mansoor (Lead Security Architect)
+        │     │     └── SOC / Threat Response (2)
+        │     ├── Priya Sharma (Senior DevOps Engineer)
+        │     │     └── Cloud Infrastructure Team (4)
+        │     └── Julian Mercer (Senior Core Systems Engineer)
+        │           └── Backend & Auth Team (5)
+        ├── Liam O'Connor (Head of Human Resources)
+        │     ├── Recruiting & Talent (2)
+        │     └── Employee Relations (1)
+        ├── Rachel Green (Director of Operations)
+        │     └── Facilities & Data Center Logistics (3)
+        └── Chloe Zhao (Head of Product)
+              └── Product Design & UX (3)

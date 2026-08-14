@@ -1,0 +1,8 @@
+EmployeeID,FullName,Title,Department,BaseSalary_USD,Bonus_Q1_USD,BankRouting,BankAccount,TaxStatus
+E-1001,Elena Vance,Chief Executive Officer,Executive,420000,125000,021000021,8821940129,Single-0
+E-1002,Marcus Brody,Chief Financial Officer,Finance,310000,85000,021000021,7731940112,Married-2
+E-1003,Devon Chen,VP of Engineering,Engineering,285000,60000,121000358,4491029381,Single-1
+E-1004,Sarah Al-Mansoor,Lead Security Architect,Infosec,215000,45000,021000021,9938102941,Married-1
+E-1005,Liam O'Connor,Head of Human Resources,HR,195000,35000,121000358,3329104859,Married-3
+E-1006,Priya Sharma,Senior DevOps Engineer,Engineering,180000,30000,021000021,6619283019,Single-0
+E-1007,Rachel Green,Director of Operations,Operations,205000,40000,021000021,5529104812,Single-0

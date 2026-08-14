@@ -1,0 +1,10 @@
+EmployeeID,FirstName,LastName,WorkEmail,PersonalPhone,SSN_Last4,Department,ManagerID,ClearanceLevel
+EMP-001,Elena,Vance,elena.vance@apexdynamics.io,415-555-0192,8819,Executive,NONE,TOP_SECRET_CORP
+EMP-002,Marcus,Brody,marcus.brody@apexdynamics.io,415-555-0143,7731,Finance,EMP-001,CONFIDENTIAL
+EMP-003,Devon,Chen,devon.chen@apexdynamics.io,510-555-0188,4491,Engineering,EMP-001,SECRET_INFRA
+EMP-004,Sarah,Al-Mansoor,sarah.m@apexdynamics.io,408-555-0177,9938,Infosec,EMP-003,SECRET_INFRA
+EMP-005,Liam,O'Connor,liam.oc@apexdynamics.io,415-555-0112,3329,Human Resources,EMP-001,RESTRICTED_PII
+EMP-006,Priya,Sharma,priya.s@apexdynamics.io,650-555-0155,6619,Engineering,EMP-003,SECRET_INFRA
+EMP-007,Rachel,Green,rachel.g@apexdynamics.io,415-555-0164,5529,Operations,EMP-001,CONFIDENTIAL
+EMP-008,Julian,Mercer,julian.m@apexdynamics.io,510-555-0199,2218,Engineering,EMP-003,INTERNAL
+EMP-009,Chloe,Zhao,chloe.z@apexdynamics.io,408-555-0133,1194,Product,EMP-001,INTERNAL

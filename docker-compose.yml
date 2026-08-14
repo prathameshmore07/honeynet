@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  cowrie:
+    image: cowrie/cowrie:latest
+    container_name: honeynet-cowrie
+    restart: unless-stopped
+    ports:
+      - "2222:2222"
+      - "2223:2223"
+    volumes:
+      - ./cowrie_logs:/cowrie/cowrie-data/log/cowrie
+      - ./cowrie_config/cowrie.cfg:/cowrie/cowrie-data/cowrie.cfg
+      - ./cowrie_config/honeyfs:/cowrie/cowrie-data/honeyfs
+    environment:
+      - COWRIE_HONEYFS=/cowrie/cowrie-data/honeyfs

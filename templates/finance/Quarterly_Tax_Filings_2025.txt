@@ -1,0 +1,18 @@
+================================================================================
+APEX DYNAMICS CORP. - US FEDERAL & STATE TAX SCHEDULE (FORM 1120 / Q4 2025)
+EIN: 84-2991048 | State of Incorporation: Delaware | Corporate HQ: San Francisco, CA
+================================================================================
+Tax Preparer: Deloitte & Touche LLP
+Filing Status: Timely Filed / Acceptance Code: CA-CORP-2025-994812
+
+Summary of Taxable Income:
+- Gross Receipts / Sales: $78,420,119.00
+- Cost of Goods Sold (Schedule A): $21,190,400.00
+- Gross Profit: $57,229,719.00
+- Total Deductions (Salaries, R&D Tax Credits, Depreciation): $44,810,250.00
+- Taxable Income Before NOL: $12,419,469.00
+
+R&D Credit Claim (Section 41): $1,420,000 (Applied to Cloud Compute R&D)
+Federal Tax Liability Due: $2,608,088.00
+Direct Debit Account: JPMorgan Chase N.A. (Routing: 021000021 | Acct: *******112)
+Authorized Signatory: Marcus Brody (CFO)

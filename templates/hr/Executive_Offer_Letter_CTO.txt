@@ -1,0 +1,27 @@
+================================================================================
+APEX DYNAMICS CORP. - EXECUTIVE EMPLOYMENT OFFER
+STRICTLY CONFIDENTIAL
+================================================================================
+Date: January 18, 2026
+To: Dr. Alexander Wright
+From: Elena Vance (Chief Executive Officer)
+
+Dear Alexander,
+
+On behalf of Apex Dynamics Corp., I am pleased to extend this formal offer for the position of Chief Technology Officer (CTO).
+
+1. COMPENSATION & INCENTIVES
+- Base Salary: $380,000.00 USD annualized, paid semi-monthly.
+- Signing Bonus: $75,000.00 USD, payable on first standard payroll cycle.
+- Performance Bonus: Target of 35% ($133,000.00 USD) based on Q3 Milestones.
+- Equity Grant: 250,000 Incentive Stock Options (ISO), subject to a 4-year vesting schedule with a 1-year cliff.
+
+2. SECURITY & IP AGREEMENTS
+- Mandatory adherence to Apex Infosec Protocol v4 (Zero-Trust Keycards, YubiKey FIDO2).
+- Non-Disclosure & IP Assignment Agreement attached as Schedule B.
+
+Please sign and return to Liam O'Connor (Head of HR) by January 25, 2026.
+
+Sincerely,
+Elena Vance, CEO
+Apex Dynamics Corp.

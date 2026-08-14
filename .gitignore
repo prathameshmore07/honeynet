@@ -1,0 +1,61 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Python Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+*.venv/
+env.bak/
+venv.bak/
+
+# SQLite Databases & WAL Telemetry Files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+honeynet.db
+
+# Honeypot Runtime Logs & Telemetry Captures
+cowrie_logs/
+*.json.log
+*.log
+
+# Cowrie Honeypot Dynamic Virtual Filesystem (Generated at runtime)
+cowrie_config/honeyfs/
+
+# Environment & Secret Files (Strictly ignored to prevent leaks)
+.env
+.env.*
+*.env
+*.secret
+!.env.example
+
+# Streamlit Local Runtime
+.streamlit/
+
+# IDE & Editor Configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# Testing & Coverage Artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/

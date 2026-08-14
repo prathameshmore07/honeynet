@@ -1,0 +1,44 @@
+{
+  "Reservations": [
+    {
+      "ReservationId": "r-0a91823901bca912",
+      "OwnerId": "881920419921",
+      "Instances": [
+        {
+          "InstanceId": "i-09182a93810238129",
+          "InstanceType": "c6i.4xlarge",
+          "PrivateIpAddress": "10.0.4.12",
+          "PublicIpAddress": null,
+          "State": { "Code": 16, "Name": "running" },
+          "Tags": [
+            { "Key": "Name", "Value": "apex-core-postgres-master" },
+            { "Key": "Environment", "Value": "Production" },
+            { "Key": "SecurityZone", "Value": "PCI-DB-Subnet" }
+          ]
+        },
+        {
+          "InstanceId": "i-08192038102938101",
+          "InstanceType": "g5.12xlarge",
+          "PrivateIpAddress": "10.0.8.24",
+          "PublicIpAddress": null,
+          "State": { "Code": 16, "Name": "running" },
+          "Tags": [
+            { "Key": "Name", "Value": "apex-ai-inference-cluster-01" },
+            { "Key": "Environment", "Value": "Production" }
+          ]
+        },
+        {
+          "InstanceId": "i-07238192038192039",
+          "InstanceType": "t4g.xlarge",
+          "PrivateIpAddress": "10.0.1.5",
+          "PublicIpAddress": "54.210.88.19",
+          "State": { "Code": 16, "Name": "running" },
+          "Tags": [
+            { "Key": "Name", "Value": "apex-bastion-gateway" },
+            { "Key": "Environment", "Value": "Public-Edge" }
+          ]
+        }
+      ]
+    }
+  ]
+}

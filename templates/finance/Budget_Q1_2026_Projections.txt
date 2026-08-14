@@ -1,0 +1,26 @@
+================================================================================
+APEX DYNAMICS CORP. - Q1 2026 OPERATING BUDGET & CAPITAL ALLOCATION
+CONFIDENTIAL - BOARD OF DIRECTORS & CFO ONLY
+================================================================================
+Generated: January 12, 2026
+Approved by: Marcus Brody (CFO), Elena Vance (CEO)
+
+1. REVENUE TARGETS
+- Enterprise SaaS ARR: $14,250,000
+- Professional Services: $2,800,000
+- Defense Sub-Contracts: $6,500,000
+Total Projected Q1 Revenue: $23,550,000
+
+2. CRITICAL EXPENDITURES
+- Engineering & Cloud Infrastructure (AWS / Azure): $3,450,000
+  * AWS Dedicated Clusters (Account 8819-2041-9921): $1,800,000
+  * Private Model Fine-tuning Cluster: $1,200,000
+- Infosec & Compliance Audit (SOC2 Type II / FedRAMP): $450,000
+- Offshore Development Contracts (Kyiv / Bangalore): $1,650,000
+- Executive & General Payroll Reserve: $8,900,000
+
+3. ESCROW & SETTLEMENT RESERVES
+- Silicon Valley Bank Escrow Account #***-9901: $5,000,000
+- International Wire Buffer (JPMorgan Chase): $2,500,000
+
+Notice: Any unauthorized dissemination of this financial projection is strictly prohibited.

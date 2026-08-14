@@ -1,0 +1,17 @@
+================================================================================
+AWS S3 BUCKET INVENTORY - ACCOUNT: 8819-2041-9921 (APEX-PROD-PRIMARY)
+Exported: 2026-02-12 08:30:15 UTC
+================================================================================
+Bucket Name                          Region         Access Policy          Encrypted
+--------------------------------------------------------------------------------
+apex-prod-backups-2026-vault         us-east-1      Private (KMS-Managed)  AES-256
+apex-financial-records-internal      us-east-1      Restricted-Role        AWS-KMS
+apex-employee-pii-vault              us-east-1      HR-Role-Only           AWS-KMS
+apex-model-checkpoints-weights       us-west-2      ML-Team-Private        AES-256
+apex-customer-export-logs            us-east-1      Internal-Audit         AES-256
+apex-terraform-state-backend         us-east-1      DevOps-Admin-Only      AWS-KMS
+
+Recent Object Highlights in [apex-prod-backups-2026-vault]:
+- s3://apex-prod-backups-2026-vault/db_dumps/core_postgres_2026_02_10.sql.gz (14.2 GB)
+- s3://apex-prod-backups-2026-vault/secrets/master_vault_unseal_keys.gpg (4.1 KB)
+- s3://apex-prod-backups-2026-vault/finance/q4_payroll_master.enc (890 KB)
