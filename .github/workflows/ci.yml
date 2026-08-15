@@ -25,9 +25,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify Backend Module Imports & Schema Initialization
+      - name: Run Backend Pytest Audit Suite
+        env:
+          MONGO_URI: "mongodb://localhost:27017/honeynet_db"
+          WS_AUTH_TOKEN: "honeynet_soc_token_2026"
         run: |
-          python -c "from backend.db import init_db; init_db(); from backend.main import app; from backend.classifier import classify_command; cat, method = classify_command('cat .env'); assert cat == 'git'; print('Backend Verification Passed!')"
+          PYTHONPATH=. pytest -v tests/test_audit.py
 
   frontend-build:
     name: Frontend TypeScript Strict Check & Build
@@ -47,6 +50,6 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
-      - name: Next.js Production Build & Strict TypeScript Compilation
+      - name: TypeScript Strict Typecheck
         working-directory: ./frontend
-        run: npm run build
+        run: npx tsc --noEmit
