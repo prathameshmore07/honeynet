@@ -13,6 +13,15 @@ env/
 env.bak/
 venv.bak/
 
+# Node.js & Next.js Build Artifacts
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+frontend/out/
+frontend/build/
+*.tsbuildinfo
+
 # SQLite Databases & WAL Telemetry Files
 *.db
 *.db-journal
@@ -34,6 +43,7 @@ cowrie_config/honeyfs/
 *.env
 *.secret
 !.env.example
+!frontend/.env.example
 
 # Streamlit Local Runtime
 .streamlit/

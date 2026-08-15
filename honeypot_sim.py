@@ -2,7 +2,7 @@
 """
 HoneyNet Multi-Session Attack Simulator
 Simulates realistic attacker sessions by generating authentic Cowrie JSON log streams
-or sending commands directly to the FastAPI simulation endpoint.
+for demo and testing purposes.
 """
 import time
 import json
@@ -10,7 +10,7 @@ import random
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
-import requests
+from typing import Optional, List
 
 from backend.config import COWRIE_LOG_PATH, BASE_DIR
 
@@ -61,6 +61,21 @@ SCENARIOS = {
             "cat /home/phil/hr/Executive_Offer_Letter_CTO.txt",
             "cat /home/phil/hr/Org_Chart_Confidential.txt"
         ]
+    },
+    "full_apt": {
+        "name": "Full Multi-Stage APT Lateral Pivot Chain",
+        "ip": "91.240.118.82",
+        "commands": [
+            "whoami",
+            "uname -a && id",
+            "find / -name '.env' 2>/dev/null",
+            "cat /home/phil/git/.env",
+            "cat ~/.aws/credentials 2>/dev/null || cat /home/phil/aws/credentials",
+            "aws s3 ls s3://apex-prod-backups-2026-vault",
+            "cat /home/phil/finance/Payroll_2026_Confidential.csv",
+            "cat /home/phil/hr/Org_Chart_Confidential.txt",
+            "cat /home/phil/finance/Wire_Transfer_Authorizations.txt"
+        ]
     }
 }
 
@@ -71,7 +86,7 @@ def generate_cowrie_log_entry(session_id: str, src_ip: str, command: str) -> str
         "session": session_id,
         "src_ip": src_ip,
         "src_port": random.randint(40000, 65000),
-        "dst_ip": "10.0.0.1",
+        "dst_ip": "10.0.1.10",
         "dst_port": 2222,
         "input": command,
         "message": f"CMD: {command}",
@@ -82,14 +97,14 @@ def generate_cowrie_log_entry(session_id: str, src_ip: str, command: str) -> str
 
 def run_simulation(
     mode: str = "file",
-    scenarios_to_run: list = None,
-    delay: float = 0.8,
-    api_url: str = "http://localhost:8000"
+    scenarios_to_run: Optional[List[str]] = None,
+    delay: float = 0.5,
+    override_ip: Optional[str] = None
 ):
-    """Executes the simulation across selected scenarios."""
+    """Executes the attack simulation across selected scenarios."""
     scenarios_to_run = scenarios_to_run or list(SCENARIOS.keys())
     print(f"\n========================================================")
-    print(f"  HoneyNet Attack Simulator Starting")
+    print(f"  🛡️ HoneyNet Attack Simulator Starting")
     print(f"  Mode: {mode.upper()} | Delay: {delay}s | Scenarios: {', '.join(scenarios_to_run)}")
     print(f"========================================================\n")
 
@@ -101,46 +116,27 @@ def run_simulation(
             continue
 
         sc = SCENARIOS[sc_key]
-        session_id = f"{sc_key}_{random.randint(1000, 9999):x}"
-        print(f"\n>>> Starting Scenario: [{sc['name']}] (Session: {session_id} | IP: {sc['ip']})")
+        session_id = f"{sc_key}_{hex(random.randint(1000, 9999))[2:]}"
+        src_ip = override_ip or sc["ip"]
 
-        for cmd in sc["commands"]:
-            if mode == "file":
-                log_line = generate_cowrie_log_entry(session_id, sc["ip"], cmd)
-                with open(COWRIE_LOG_PATH, "a", encoding="utf-8") as f:
-                    f.write(log_line + "\n")
-                    f.flush()
+        print(f"\n>>> Starting Scenario: [{sc['name']}] (Session: {session_id} | IP: {src_ip})")
+
+        with open(COWRIE_LOG_PATH, "a", encoding="utf-8") as f:
+            for cmd in sc["commands"]:
+                entry = generate_cowrie_log_entry(session_id, src_ip, cmd)
+                f.write(entry + "\n")
+                f.flush()
                 print(f"  [LOG >> cowrie.json] {cmd}")
-            else:
-                try:
-                    payload = {
-                        "session_id": session_id,
-                        "src_ip": sc["ip"],
-                        "command": cmd,
-                        "scenario": sc_key
-                    }
-                    resp = requests.post(f"{api_url}/api/simulate", json=payload, timeout=5.0)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        cat = data.get("category", "other")
-                        mitre = data.get("mitre_tag", "")
-                        print(f"  [API >>] {cmd:45} | Cat: {cat:8} | MITRE: {mitre}")
-                    else:
-                        print(f"  [API ERROR {resp.status_code}] {cmd}")
-                except Exception as e:
-                    print(f"  [API Connection Failed: {e}] {cmd}")
+                time.sleep(delay)
 
-            time.sleep(delay)
-
-    print(f"\n[+] Simulation complete! View results on the Streamlit dashboard.\n")
+    print(f"\n[+] Simulation complete! View results on the Next.js SOC dashboard.\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HoneyNet Multi-Session Attack Simulator")
-    parser.add_argument("--mode", choices=["file", "api"], default="file", help="Simulation mode: write to cowrie.json file or call FastAPI endpoint")
-    parser.add_argument("--scenario", choices=["finance", "git", "aws", "hr", "all"], default="all", help="Attack scenario to run")
-    parser.add_argument("--delay", type=float, default=0.8, help="Delay in seconds between commands")
-    parser.add_argument("--api-url", default="http://localhost:8000", help="FastAPI backend URL (for api mode)")
-
+    parser.add_argument("--scenario", choices=list(SCENARIOS.keys()) + ["all"], default="all", help="Scenario to run")
+    parser.add_argument("--delay", type=float, default=0.5, help="Delay between commands in seconds")
+    parser.add_argument("--ip", type=str, default=None, help="Optional IP override")
     args = parser.parse_args()
-    selected = list(SCENARIOS.keys()) if args.scenario == "all" else [args.scenario]
-    run_simulation(mode=args.mode, scenarios_to_run=selected, delay=args.delay, api_url=args.api_url)
+
+    scenarios = list(SCENARIOS.keys()) if args.scenario == "all" else [args.scenario]
+    run_simulation(scenarios_to_run=scenarios, delay=args.delay, override_ip=args.ip)

@@ -1,12 +1,14 @@
 """
 HoneyNet FastAPI Application
-Central backend orchestrator for adaptive honeypot monitoring.
+Central backend orchestrator for adaptive honeypot monitoring,
+WebSocket real-time telemetry, and MITRE threat intelligence.
 """
 import threading
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -14,9 +16,12 @@ from backend.config import COWRIE_LOG_PATH, OLLAMA_MODEL, OLLAMA_URL
 from backend.db import (
     init_db,
     get_all_sessions,
+    get_session_by_id,
     get_events_by_session,
     get_all_events,
     get_overview_metrics,
+    get_all_assets,
+    get_mitre_statistics,
     record_event
 )
 from backend.classifier import (
@@ -26,8 +31,11 @@ from backend.classifier import (
     generate_attacker_summary
 )
 from backend.mitre_mapper import map_command_to_mitre
-from backend.asset_manager import get_assets_for_category, seed_honeyfs_from_templates
+from backend.asset_manager import seed_honeyfs_from_templates
+from backend.expansion_engine import build_attack_path_graph
 from backend.log_tailer import CowrieLogTailer
+from backend.ws_manager import ws_manager, set_main_event_loop, broadcast_sync
+from backend.models import SimulatorTriggerRequest
 
 # Configure logging
 logging.basicConfig(
@@ -42,9 +50,13 @@ tailer_thread: Optional[threading.Thread] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize database, seed honeyfs, pre-warm LLM, launch background tailer."""
-    logger.info("Initializing HoneyNet SQLite WAL Database...")
+    logger.info("Initializing HoneyNet SQLite/Postgres Database...")
     init_db()
     
+    # Store main event loop for thread-safe WebSocket broadcasts
+    loop = asyncio.get_running_loop()
+    set_main_event_loop(loop)
+
     logger.info("Ensuring HoneyFS virtual filesystem is seeded...")
     seed_honeyfs_from_templates()
     
@@ -64,11 +76,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="HoneyNet AI Adaptive Honeypot API",
     description="Real-time attacker intent classification and forensic telemetry API",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-# Enable CORS
+# Enable CORS for Next.js and external dashboards
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -77,116 +89,158 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic Request Models
-class SimulateCommandRequest(BaseModel):
-    session_id: str = "sim_attacker_01"
-    src_ip: str = "198.51.100.42"
-    command: str
-    scenario: Optional[str] = None
+# -----------------------------------------------------------------------------
+# WebSocket Endpoint for Live SOC Streaming
+# -----------------------------------------------------------------------------
+@app.websocket("/ws/live")
+async def websocket_live_feed(websocket: WebSocket):
+    """Real-time bidirectional WebSocket stream for live command feeds and risk alerts."""
+    await ws_manager.connect(websocket)
+    try:
+        # Send initial welcome and snapshot
+        overview = get_overview_metrics()
+        await websocket.send_json({
+            "type": "connection_established",
+            "data": {
+                "message": "Connected to HoneyNet Real-Time Threat Stream",
+                "overview": overview
+            }
+        })
+        while True:
+            # Keep connection alive and accept optional client pings
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception as e:
+        logger.warning(f"WebSocket error: {e}")
+        ws_manager.disconnect(websocket)
 
-class ClassifyRequest(BaseModel):
-    command: str
-
+# -----------------------------------------------------------------------------
+# REST Endpoints
+# -----------------------------------------------------------------------------
 @app.get("/")
 def root():
     return {
-        "service": "HoneyNet AI Adaptive Honeypot",
+        "service": "HoneyNet AI Adaptive Honeynet SOC Core",
         "status": "operational",
-        "docs": "/docs"
+        "version": "2.0.0",
+        "docs": "/docs",
+        "websocket": "/ws/live"
     }
 
 @app.get("/api/status")
 def get_system_status():
     """System health check including Ollama connectivity and log file status."""
     ollama_ok, ollama_msg = check_ollama_health()
-    log_exists = COWRIE_LOG_PATH.exists()
-    
-    metrics = get_overview_metrics()
-    
     return {
-        "status": "online",
+        "status": "healthy",
         "ollama": {
-            "healthy": ollama_ok,
+            "available": ollama_ok,
             "url": OLLAMA_URL,
             "model": OLLAMA_MODEL,
-            "message": ollama_msg
+            "status_message": ollama_msg
         },
         "cowrie_log": {
             "path": str(COWRIE_LOG_PATH),
-            "exists": log_exists,
-            "size_bytes": COWRIE_LOG_PATH.stat().st_size if log_exists else 0
+            "exists": COWRIE_LOG_PATH.exists(),
+            "size_bytes": COWRIE_LOG_PATH.stat().st_size if COWRIE_LOG_PATH.exists() else 0
         },
-        "metrics": metrics
+        "active_ws_clients": len(ws_manager.active_connections)
     }
 
-@app.get("/api/metrics")
-def get_metrics():
-    """Retrieves live aggregate threat metrics."""
-    return get_overview_metrics()
+@app.get("/api/overview")
+def get_dashboard_overview():
+    """Returns top-level SOC telemetry metrics."""
+    metrics = get_overview_metrics()
+    ollama_ok, _ = check_ollama_health()
+    metrics["ollama_status"] = "Active" if ollama_ok else "Heuristic Mode"
+    metrics["cowrie_status"] = "Active" if COWRIE_LOG_PATH.exists() else "Standby"
+    return metrics
 
 @app.get("/api/sessions")
 def list_sessions():
-    """Returns all recorded attacker sessions sorted by latest activity."""
+    """Returns all attacker sessions ordered by last activity."""
     return get_all_sessions()
+
+@app.get("/api/sessions/{session_id}")
+def get_session_detail(session_id: str):
+    """Returns full forensic details for a specific session."""
+    session = get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    events = get_events_by_session(session_id)
+    return {
+        "session": session,
+        "events": events
+    }
 
 @app.get("/api/events")
 def list_events(
-    session_id: Optional[str] = Query(None, description="Filter by session ID"),
-    limit: int = Query(100, ge=1, le=500, description="Max events to return")
+    session_id: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = Query(100, le=500)
 ):
-    """Returns real-time event logs, optionally filtered by session."""
+    """Returns recent command execution events with optional filters."""
     if session_id:
-        return get_events_by_session(session_id)
-    return get_all_events(limit=limit)
+        events = get_events_by_session(session_id)
+    else:
+        events = get_all_events(limit=limit)
+    if category and category != "all":
+        events = [e for e in events if e.get("category") == category]
+    return events
 
-@app.post("/api/classify")
-def classify_adhoc_command(req: ClassifyRequest):
-    """Ad-hoc classification for testing."""
-    category, method = classify_command(req.command)
-    files = get_assets_for_category(category) if category != "other" else []
-    mitre_tag, mitre_name, risk_score = map_command_to_mitre(req.command, category)
-    return {
-        "command": req.command,
-        "category": category,
-        "method": method,
-        "files_served": files,
-        "mitre": {
-            "tag": mitre_tag,
-            "name": mitre_name
-        },
-        "risk_score": risk_score
-    }
+@app.get("/api/attack-path/{session_id}")
+def get_session_attack_path(session_id: str):
+    """Constructs React Flow graph nodes and edges representing attacker lateral movement."""
+    session = get_session_by_id(session_id)
+    if not session:
+        # Return base topology if session not found
+        return build_attack_path_graph([], 0)
+    cats = session.get("categories_triggered", [])
+    risk = session.get("risk_score", 10)
+    return build_attack_path_graph(cats, risk)
 
-@app.post("/api/simulate")
-def simulate_attack_command(req: SimulateCommandRequest):
+@app.get("/api/mitre-matrix")
+def get_mitre_matrix():
+    """Aggregates all triggered MITRE ATT&CK techniques with counts and samples."""
+    return get_mitre_statistics()
+
+@app.get("/api/assets")
+def list_assets():
+    """Returns all dynamically generated deception assets."""
+    return get_all_assets()
+
+# -----------------------------------------------------------------------------
+# Attack Simulator Trigger API (For Dashboard & Live Demos)
+# -----------------------------------------------------------------------------
+@app.post("/api/simulator/trigger")
+def trigger_attack_simulation(req: SimulatorTriggerRequest):
     """
-    Direct simulation endpoint: processes a synthetic attacker command through
-    the full classification, asset deployment, and persistence pipeline.
+    Triggers an automated simulated attacker scenario in a background thread.
+    Ideal for testing and evaluation without external attackers.
     """
-    category, method = classify_command(req.command)
-    files_served = get_assets_for_category(category) if category != "other" else []
-    mitre_tag, mitre_name, risk_score = map_command_to_mitre(req.command, category)
+    from honeypot_sim import run_simulation
     
-    event_id = record_event(
-        session_id=req.session_id,
-        src_ip=req.src_ip,
-        command=req.command,
-        category=category,
-        files_served=files_served,
-        mitre_tag=mitre_tag,
-        mitre_name=mitre_name,
-        event_risk_score=risk_score
-    )
+    scenarios = [req.scenario] if req.scenario != "full_apt" else ["git", "aws", "finance", "hr"]
+    
+    def _sim_worker():
+        try:
+            run_simulation(
+                mode="file",
+                scenarios_to_run=scenarios,
+                delay=req.delay,
+                override_ip=req.ip
+            )
+        except Exception as e:
+            logger.error(f"Simulator trigger error: {e}")
+
+    threading.Thread(target=_sim_worker, daemon=True).start()
     
     return {
-        "event_id": event_id,
-        "session_id": req.session_id,
-        "src_ip": req.src_ip,
-        "command": req.command,
-        "category": category,
-        "classification_method": method,
-        "files_served": files_served,
-        "mitre_tag": mitre_tag,
-        "mitre_name": mitre_name,
-        "risk_score": risk_score
+        "status": "triggered",
+        "scenario": req.scenario,
+        "scenarios_queued": scenarios,
+        "message": f"Simulation scenario '{req.scenario}' started successfully."
     }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# HoneyNet One-Click Startup Script
+# HoneyNet One-Click Unified SOC Startup Script
 # ==============================================================================
 set -e
 
@@ -8,7 +8,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
 echo "========================================================"
-echo "      🛡️  HONEYNET AI ADAPTIVE HONEYPOT LAUNCHER"
+echo "      🛡️  HONEYNET AI ADAPTIVE HONEYNET SOC LAUNCHER"
 echo "========================================================"
 
 # 1. Activate Python Environment
@@ -47,14 +47,14 @@ python3 -c "from backend.asset_manager import seed_honeyfs_from_templates; seed_
 # 4. Cowrie Docker (Optional / If Docker Available)
 if command -v docker &> /dev/null && docker info > /dev/null 2>&1; then
     echo "[+] Docker detected. Launching Cowrie honeypot container..."
-    docker compose up -d
+    docker compose up -d cowrie 2>/dev/null || true
     echo "  [✓] Cowrie SSH listening on port 2222 (AuthRandom enabled)."
 else
-    echo "[!] Docker not detected or not running. Standalone honeypot simulator mode is active."
+    echo "[!] Docker not detected or running in standalone simulator mode."
     echo "  [!] Use 'python3 honeypot_sim.py' to generate realistic attack telemetry."
 fi
 
-# 4. Launch Services
+# 5. Launch FastAPI Backend
 echo ""
 echo "[+] Starting FastAPI backend on http://localhost:8000 ..."
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --log-level warning &
@@ -62,18 +62,21 @@ FASTAPI_PID=$!
 
 sleep 1
 
-echo "[+] Starting Streamlit Dashboard on http://localhost:8501 ..."
-streamlit run dashboard/dashboard.py --server.port 8501 --server.headless true &
-STREAMLIT_PID=$!
+# 6. Launch Next.js SOC Dashboard
+echo "[+] Starting Next.js SOC Dashboard on http://localhost:3000 ..."
+if [ -d "frontend" ]; then
+    (cd frontend && npm run dev -- -p 3000 > /dev/null 2>&1) &
+    FRONTEND_PID=$!
+fi
 
 echo ""
 echo "========================================================"
-echo "  🚀 HoneyNet is Running!"
+echo "  🚀 HoneyNet SOC Platform is Running!"
 echo "  ----------------------------------------------------"
-echo "  📊 Live Dashboard: http://localhost:8501"
-echo "  🔌 API Backend:    http://localhost:8000 (Docs: /docs)"
-echo "  🍯 Cowrie SSH:     ssh root@localhost -p 2222"
-echo "  🎯 Attack Sim:     python3 honeypot_sim.py"
+echo "  📊 Next.js SOC Dashboard:  http://localhost:3000"
+echo "  🔌 FastAPI REST & WS Core: http://localhost:8000 (Docs: /docs)"
+echo "  🍯 Cowrie SSH Honeypot:    ssh root@localhost -p 2222"
+echo "  🎯 Demo Attack Sim:        python3 honeypot_sim.py"
 echo "========================================================"
 echo "Press Ctrl+C to stop all HoneyNet services."
 
@@ -82,9 +85,8 @@ cleanup() {
     echo ""
     echo "[+] Stopping HoneyNet services..."
     kill $FASTAPI_PID 2>/dev/null || true
-    kill $STREAMLIT_PID 2>/dev/null || true
-    if command -v docker &> /dev/null; then
-        docker compose down 2>/dev/null || true
+    if [ ! -z "$FRONTEND_PID" ]; then
+        kill $FRONTEND_PID 2>/dev/null || true
     fi
     echo "[✓] Cleaned up all processes. Goodbye!"
     exit 0

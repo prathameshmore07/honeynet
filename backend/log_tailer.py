@@ -1,18 +1,22 @@
 """
 HoneyNet Cowrie Log Tailer
 Tails cowrie.json in real time, filters command events, deduplicates,
-classifies intent with AI/heuristics, and persists forensic records to SQLite.
+classifies intent with AI/heuristics, deploys synthetic assets, updates attacker profiles,
+and broadcasts live telemetry to connected WebSocket clients.
 """
 import json
 import time
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Set
+
 from backend.config import COWRIE_LOG_PATH
-from backend.db import record_event, update_session_summary, get_events_by_session
-from backend.classifier import classify_command, generate_attacker_summary
+from backend.db import record_event, update_session_profile, get_events_by_session, get_session_by_id
+from backend.classifier import classify_command
 from backend.mitre_mapper import map_command_to_mitre
-from backend.asset_manager import get_assets_for_category
+from backend.asset_generator import generate_assets_for_intent
+from backend.profiler import evaluate_attacker_profile
+from backend.ws_manager import broadcast_sync
 
 logger = logging.getLogger("honeynet.tailer")
 
@@ -30,7 +34,6 @@ class CowrieLogTailer:
     def _get_time_bucket(self, timestamp_str: str) -> int:
         """Derives a coarse 3-second time bucket for event deduplication."""
         try:
-            # Fallback to current time if parsing fails
             return int(time.time()) // 3
         except Exception:
             return int(time.time()) // 3
@@ -50,7 +53,7 @@ class CowrieLogTailer:
             return None
 
         event_id = data.get("eventid", "")
-        # Strict filtering: ignore login, connect, fingerprint, keepalive noise
+        # Strict filtering: ignore keepalive and connection noise
         if event_id != "cowrie.command.input":
             return None
 
@@ -71,18 +74,20 @@ class CowrieLogTailer:
             return None
 
         self.seen_events.add(dedupe_key)
-        # Keep deduplication cache bounded
         if len(self.seen_events) > 2000:
             self.seen_events = set(list(self.seen_events)[-1000:])
 
-        # 1. AI Intent Classification
+        # 1. AI Intent Classification (Heuristic + Ollama)
         category, method = classify_command(command)
 
-        # 2. Asset Discovery & Deployment Mapping
-        files_served = get_assets_for_category(category) if category != "other" else []
+        # 2. Dynamic Asset Deployment (if targeted category)
+        deployed_assets = []
+        if category != "other":
+            deployed_assets = generate_assets_for_intent(session_id, category)
 
         # 3. MITRE ATT&CK Mapping & Risk Scoring
         mitre_tag, mitre_name, risk_score = map_command_to_mitre(command, category)
+        files_served = [a.get("file_path", "") for a in deployed_assets]
 
         # 4. Database Persistence
         db_id = record_event(
@@ -97,33 +102,61 @@ class CowrieLogTailer:
             timestamp=timestamp
         )
 
-        # Update running session command count & trigger periodic summary update
-        current_cnt = self.session_cmd_counts.get(session_id, 0) + 1
-        self.session_cmd_counts[session_id] = current_cnt
+        # 5. Attacker Profiling Update
+        all_session_events = get_events_by_session(session_id)
+        session_data = get_session_by_id(session_id) or {}
+        categories_triggered = session_data.get("categories_triggered", [])
+        current_risk = session_data.get("risk_score", risk_score)
 
-        if current_cnt % 3 == 0 or category != "other":
-            # Generate updated AI synopsis
-            events = get_events_by_session(session_id)
-            cmds = [e["command"] for e in events if e.get("command")]
-            summary = generate_attacker_summary(cmds)
-            update_session_summary(session_id, summary)
-
-        logger.info(
-            f"[{session_id[:8]}] Cmd: '{command}' -> Cat: {category} ({method}) | "
-            f"MITRE: {mitre_tag} | Assets: {len(files_served)}"
+        profile = evaluate_attacker_profile(all_session_events, categories_triggered, current_risk)
+        update_session_profile(
+            session_id=session_id,
+            inferred_intent=profile["inferred_intent"],
+            skill_level=profile["skill_level"],
+            goal_summary=profile["goal_summary"],
+            ai_summary=profile["ai_summary"],
+            risk_score=profile["risk_score"]
         )
 
-        return {
+        event_payload = {
             "id": db_id,
             "session_id": session_id,
             "src_ip": src_ip,
             "command": command,
             "category": category,
+            "classification_method": method,
             "files_served": files_served,
             "mitre_tag": mitre_tag,
             "mitre_name": mitre_name,
-            "risk_score": risk_score
+            "event_risk_score": risk_score,
+            "session_risk_score": profile["risk_score"],
+            "skill_level": profile["skill_level"],
+            "inferred_intent": profile["inferred_intent"],
+            "timestamp": timestamp or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         }
+
+        # 6. Real-time WebSocket Broadcast
+        broadcast_sync({
+            "type": "command_event",
+            "data": event_payload
+        })
+
+        if deployed_assets:
+            broadcast_sync({
+                "type": "asset_created",
+                "data": {
+                    "session_id": session_id,
+                    "category": category,
+                    "assets": deployed_assets
+                }
+            })
+
+        logger.info(
+            f"[{session_id[:8]}] '{command}' -> Cat: {category} ({method}) | "
+            f"MITRE: {mitre_tag} | Deployed: {len(deployed_assets)} | Risk: {profile['risk_score']}"
+        )
+
+        return event_payload
 
     def poll_once(self) -> int:
         """Reads and processes any newly appended lines in cowrie.json."""

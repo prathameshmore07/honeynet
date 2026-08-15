@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # 1. Cowrie SSH / Telnet Honeypot
   cowrie:
     image: cowrie/cowrie:latest
     container_name: honeynet-cowrie
@@ -14,3 +15,83 @@ services:
       - ./cowrie_config/honeyfs:/cowrie/cowrie-data/honeyfs
     environment:
       - COWRIE_HONEYFS=/cowrie/cowrie-data/honeyfs
+    networks:
+      - honeynet-internal
+
+  # 2. PostgreSQL 16 Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: honeynet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: honeynet
+      POSTGRES_PASSWORD: honeynet_secure_password_2026
+      POSTGRES_DB: honeynet_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - honeynet-internal
+
+  # 3. HoneyNet FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: honeynet-backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - cowrie
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://honeynet:honeynet_secure_password_2026@postgres:5432/honeynet_db
+      - HONEYNET_DB_PATH=/app/honeynet.db
+      - COWRIE_LOG_PATH=/app/cowrie_logs/cowrie.json
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen2.5:7b
+    volumes:
+      - ./cowrie_logs:/app/cowrie_logs
+      - ./cowrie_config:/app/cowrie_config
+      - ./templates:/app/templates
+    networks:
+      - honeynet-internal
+
+  # 4. Next.js SOC Threat Intelligence Dashboard
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: honeynet-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    networks:
+      - honeynet-internal
+
+  # 5. Local Ollama AI Engine (Optional local container)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: honeynet-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - honeynet-internal
+
+networks:
+  honeynet-internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  ollama_models:

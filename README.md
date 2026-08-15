@@ -1,320 +1,182 @@
-# HoneyNet: AI-Driven Adaptive Cyber Deception Honeypot
+# HoneyNet: AI-Powered Adaptive Cyber Deception & Autonomous Honeytoken Honeynet
 
-HoneyNet is an intelligent, low-interaction-to-medium-interaction cyber deception system that analyzes incoming attacker commands in real time, classifies tactical intent using a local large language model (LLM) or fallback heuristic engine, and dynamically reveals high-fidelity synthetic company assets to prolong engagement and capture forensic intelligence.
-
----
-
-## Executive Summary
-
-Traditional honeypots often rely on static fake filesystems that fail to adapt to an adversary's specific objectives, allowing experienced attackers to quickly recognize the containment environment and disconnect. HoneyNet solves this by pairing real-time command stream processing with intent classification. As an attacker executes reconnaissance and discovery commands, HoneyNet identifies whether the adversary is seeking financial records, developer secrets, cloud credentials, or human resources data, and surfaces corresponding synthetic enterprise artifacts to keep the attacker engaged while building a comprehensive forensic timeline.
-
-### Technical Architecture Principles
-
-* **Real-Time Command Ingestion:** Asynchronous log tailing with sliding-window deduplication processes raw Cowrie SSH honeypot telemetry with sub-second latency.
-* **Dual-Tier Intent Classification:** Evaluates attacker commands via local Ollama LLMs (`qwen2.5:7b` or `gemma2:9b`) with deterministic regex-based fallback mechanisms ensuring zero-downtime classification.
-* **Pre-Staged Synthetic Asset Surface:** High-fidelity, domain-specific enterprise assets (payroll records, `.env` secret files, AWS IAM configurations, executive directories) are pre-staged and cataloged for dynamic exposure tracking.
-* **MITRE ATT&CK Mapping & Threat Scoring:** Ingested commands are mapped to standardized MITRE ATT&CK technique IDs with dynamic session-level risk scoring.
-* **High-Concurrency Telemetry Store:** SQLite with Write-Ahead Logging (WAL mode) and busy timeouts enables concurrent multi-threaded writes from log tailers while serving read queries to REST APIs and analytics dashboards.
+**HoneyNet** is an enterprise-grade cyber deception platform that analyzes adversary commands in real time, infers tactical intent using local Large Language Models (Ollama Qwen2.5 / Gemma2) with fallback heuristics, and dynamically provisions realistic synthetic canary assets directly into Cowrie's virtual filesystem to entrap attackers, profile their TTPs, and map lateral movement across enterprise networks.
 
 ---
 
-## System Architecture
+## 🛡️ Key Features
+
+* **⚡ Real-Time Ingestion & WebSocket Streaming:** Sub-second event ingestion from Cowrie SSH honeypots streamed directly to the Next.js SOC Dashboard via bidirectional WebSockets (`/ws/live`).
+* **🧠 Dual-Layer AI Intent Classification:** Asynchronous Ollama LLM intent inference coupled with deterministic regex-based fallback for zero-downtime classification (Credentials, Cloud/AWS, Finance, Source Code, HR/PII).
+* **🕸️ Lateral Movement & React Flow Graph:** Visualizes attack paths across simulated enterprise topology (`Ubuntu Bastion` $\rightarrow$ `GitLab` $\rightarrow$ `Jenkins` $\rightarrow$ `AWS VPC` $\rightarrow$ `PostgreSQL DB` $\rightarrow$ `Finance Vault` $\rightarrow$ `Executive Workstation`).
+* **📁 Dynamic Deception Honeytoken Generator:** Injects synthetic, believable canary artifacts (mock environment templates, fake git repositories, sanitized AWS CLI credentials, employee rosters, and database dumps) on-demand into Cowrie's virtual sandbox.
+* **🎯 MITRE ATT&CK Matrix & Threat Scoring:** Maps commands to ATT&CK techniques with an interactive heatmap and composite risk index (0–100).
+* **🕵️ Automated Threat Actor Profiling:** Evaluates sophistication tiers (*Script Kiddie*, *Opportunistic*, *APT/Sophisticated*), infers campaign objectives, and generates executive AI incident narratives.
+* **🚀 100% Free & Self-Hostable:** Zero paid APIs or cloud dependencies. Runs entirely local on Docker or standalone.
+
+---
+
+## 📐 System Architecture
 
 ```mermaid
 flowchart TD
-    subgraph DeceptionSurface ["1. Deception Surface & Ingress"]
-        Attacker["Adversary / Security Researcher"]
+    subgraph DeceptionSurface ["1. Ingress & Containment"]
+        Attacker["Adversary (SSH Port 2222)"]
         Simulator["Attack Simulator (honeypot_sim.py)"]
-        Cowrie["Cowrie Honeypot Container (Docker)"]
+        Cowrie["Cowrie Honeypot Container"]
         CowrieLog["cowrie_logs/cowrie.json"]
         
-        Attacker -->|SSH :2222 / :2223| Cowrie
-        Simulator -->|Direct Log Ingestion| CowrieLog
-        Cowrie -->|Writes Telemetry| CowrieLog
+        Attacker --> Cowrie
+        Simulator --> CowrieLog
+        Cowrie --> CowrieLog
     end
 
-    subgraph ProcessingPipeline ["2. Ingestion & Analysis Pipeline"]
-        LogTailer["Log Tailer (backend/log_tailer.py)"]
-        DedupeEngine["Sliding-Window Deduplication (3s Window)"]
-        
+    subgraph CoreEngine ["2. FastAPI Backend & AI Core"]
+        LogTailer["Log Ingestion Worker (backend/log_tailer.py)"]
+        OllamaLLM["Local Ollama AI (Qwen2.5 / Gemma2)"]
+        HeuristicFallback["Heuristic Intent Engine"]
+        AssetGen["Dynamic Deception Generator (backend/asset_generator.py)"]
+        ExpansionEngine["Lateral Expansion Engine (backend/expansion_engine.py)"]
+        Profiler["Attacker Profiler & Risk Engine (backend/profiler.py)"]
+        HoneyFS["Cowrie HoneyFS Sandbox"]
+
         CowrieLog --> LogTailer
-        LogTailer --> DedupeEngine
+        LogTailer --> OllamaLLM & HeuristicFallback
+        OllamaLLM & HeuristicFallback --> AssetGen & ExpansionEngine & Profiler
+        AssetGen -->|Inject Decoys| HoneyFS
     end
 
-    subgraph IntelligenceEngine ["3. Threat Intelligence & Classification Engine"]
-        ClassifierRouter{"Classifier Router"}
-        OllamaLLM["Local Ollama Engine (qwen2.5:7b / 5s Timeout)"]
-        HeuristicFallback["Heuristic Regex Classifier"]
-        MitreEngine["MITRE ATT&CK & Risk Engine (backend/mitre_mapper.py)"]
-        AssetManager["Synthetic Asset Catalog (backend/asset_manager.py)"]
+    subgraph Storage ["3. State & Persistence Layer"]
+        Database[("PostgreSQL 16 / SQLite WAL (honeynet.db)")]
+        Profiler --> Database
+        AssetGen --> Database
+    end
 
-        DedupeEngine --> ClassifierRouter
-        ClassifierRouter -->|Primary: Available| OllamaLLM
-        ClassifierRouter -->|Fallback: Timeout/Offline| HeuristicFallback
+    subgraph SOCDashboard ["4. Next.js Threat Intelligence Dashboard"]
+        NextJS["Next.js 16 + React Flow + Tailwind CSS (:3000)"]
+        FastAPI["FastAPI REST & WebSockets (:8000)"]
         
-        OllamaLLM --> MitreEngine
-        HeuristicFallback --> MitreEngine
-        MitreEngine --> AssetManager
-    end
-
-    subgraph StorageLayer ["4. Persistence & State Management"]
-        SQLiteDB[("SQLite WAL Database (honeynet.db)")]
-        MitreEngine -->|Atomic Event & Session Update| SQLiteDB
-    end
-
-    subgraph PresentationLayer ["5. Monitoring & Control Interfaces"]
-        FastAPI["FastAPI Orchestrator (:8000)"]
-        Streamlit["Streamlit Threat Dashboard (:8501)"]
-        
-        SQLiteDB --> FastAPI
-        SQLiteDB --> Streamlit
-        FastAPI -->|REST Telemetry API| ExternalSIEM["SIEM / External Ingestion"]
+        Database --> FastAPI
+        LogTailer -->|WebSocket Stream| FastAPI
+        FastAPI --> NextJS
     end
 ```
 
 ---
 
-## Data Flow & Processing Lifecycle
+## 📂 Repository Structure
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Attacker as Attacker / Simulator
-    participant Honeypot as Cowrie Honeypot
-    participant Tailer as Log Tailer Worker
-    participant AI as Ollama / Heuristic Classifier
-    participant MITRE as MITRE & Risk Engine
-    participant DB as SQLite (WAL Mode)
-    participant UI as Streamlit Live Dashboard
-
-    Attacker->>Honeypot: Execute Command (e.g., cat /home/phil/git/.env)
-    Honeypot->>Tailer: Stream JSON Event (cowrie.command.input)
-    Tailer->>Tailer: Validate Event & Check 3s Deduplication Window
-    Tailer->>AI: Request Intent Classification (Command String)
-    AI-->>Tailer: Return Category ('git', Method: 'ai' | 'heuristic')
-    Tailer->>MITRE: Evaluate Command & Category
-    MITRE-->>Tailer: Return Technique (T1552.001), Description, Risk (+45)
-    Tailer->>DB: Atomically Insert Event & Update Session Risk/Activity
-    Tailer->>AI: (Every N Commands) Generate Session Attacker Synopsis
-    AI-->>DB: Update Session AI Summary
-    UI->>DB: Polling Query (2s Interval)
-    DB-->>UI: Return Updated Metrics, Intercept Feed, and Risk Timeline
-```
-
----
-
-## Key Features
-
-### 1. Dual-Tier Behavioral Intent Classification
-* **Local LLM Inference:** Integrates with Ollama running quantized local models (`qwen2.5:7b`, `gemma2:9b`) via zero-temperature inference prompts for low-latency classification.
-* **Deterministic Fallback:** A regex pattern matching engine guarantees classification continuity even during high load or LLM unavailability.
-* **Session Summarization:** Periodically evaluates the chronological command trail of an attacker to synthesize high-level tactical intent statements.
-
-### 2. High-Fidelity Synthetic Deception Domains
-HoneyNet maintains distinct deception verticals populated with synthetic corporate data:
-* **Finance:** Payroll exports, quarterly financial projections, tax filings, wire transfer authorization manifests.
-* **Git & Developer Secrets:** Leaked `.env` configuration files, database connection strings, local Git repository history, authentication tokens.
-* **AWS Cloud Infrastructure:** Simulated AWS credential files, S3 bucket enumeration listings, EC2 instance metadata dumps.
-* **Human Resources (HR):** Employee directories, executive offer letters, corporate organizational charts, severance schedules.
-
-### 3. MITRE ATT&CK Matrix Alignment & Risk Scoring
-Every intercepted command is categorized against standardized MITRE ATT&CK enterprise tactics and assigned a weighted threat score:
-
-| MITRE Technique ID | Technique Name | Tactic | Base Risk Weight | Pattern Indicators |
-| :--- | :--- | :--- | :--- | :--- |
-| `T1552.001` | Credentials in Files | Credential Access | 45 | `.env`, `credentials`, `id_rsa`, `jwt`, `secret`, `api_key` |
-| `T1526` | Cloud Service Discovery | Discovery | 40 | `aws`, `s3`, `ec2`, `iam`, `bucket`, `boto3`, `sts` |
-| `T1005` | Data from Local System | Collection | 30 | `cat`, `grep`, `tail`, `head`, `less`, `awk`, `strings` |
-| `T1046` | Network Service Discovery | Discovery | 20 | `netstat`, `ss`, `nmap`, `arp`, `ifconfig`, `ip addr` |
-| `T1083` | File and Directory Discovery | Discovery | 15 | `ls`, `find`, `tree`, `pwd`, `dir`, `locate` |
-| `T1082` | System Information Discovery | Discovery | 10 | `uname`, `hostname`, `uptime`, `/etc/os-release` |
-| `T1033` | System Owner/User Discovery | Discovery | 10 | `whoami`, `id`, `w`, `last`, `/etc/passwd` |
-| `T1059.004` | Unix Shell Execution | Execution | 10 | `bash`, `sh`, `curl`, `wget`, `python` |
-
-*Note: Commands operating on identified sensitive verticals (Finance, Git, AWS, HR) receive a +10 risk multiplier.*
-
-### 4. Resilient Database & Storage Architecture
-* Uses SQLite in **Write-Ahead Logging (WAL)** mode with connection-level busy timeouts (`PRAGMA busy_timeout = 5000`).
-* Ensures thread-safe operation between background ingestion workers and front-facing REST endpoints without read/write locking contention.
-
----
-
-## Project Structure
-
-```
+```text
 .
 ├── backend/
-│   ├── __init__.py
-│   ├── config.py                 # Centralized configuration and path resolution
-│   ├── db.py                     # SQLite WAL data layer, indexing, and metrics queries
-│   ├── classifier.py             # Ollama client, prompt pipeline, and heuristic engine
-│   ├── log_tailer.py             # Cowrie JSON stream reader with sliding deduplication
-│   ├── mitre_mapper.py           # MITRE ATT&CK signature matching and risk calculation
-│   ├── asset_manager.py          # Synthetic asset inventory and category scanner
-│   └── main.py                   # FastAPI application lifecycle and REST endpoints
-├── dashboard/
-│   ├── __init__.py
-│   └── dashboard.py              # Streamlit threat intelligence dashboard
+│   ├── asset_generator.py      # Dynamic synthetic honeytoken and bait file generator
+│   ├── asset_manager.py        # Deception asset catalog and honeyfs seeding
+│   ├── classifier.py           # Ollama LLM integration and heuristic intent engine
+│   ├── config.py               # Environment configuration and path resolution
+│   ├── db.py                   # PostgreSQL & SQLite dual-storage persistence layer
+│   ├── expansion_engine.py     # Lateral movement graph builder for React Flow
+│   ├── log_tailer.py           # Cowrie JSON log ingestion & event dispatching
+│   ├── main.py                 # FastAPI REST API and WebSocket /ws/live endpoint
+│   ├── mitre_mapper.py         # MITRE ATT&CK signature matcher and risk calculator
+│   ├── models.py               # Pydantic schemas and database models
+│   ├── profiler.py             # Attacker sophistication and threat scoring engine
+│   └── ws_manager.py           # Thread-safe WebSocket connection broadcaster
+├── frontend/
+│   ├── app/
+│   │   ├── globals.css         # Cyber SOC dark theme & React Flow styling
+│   │   ├── layout.tsx          # Root layout and metadata
+│   │   └── page.tsx            # Main SOC Command Center dashboard page
+│   ├── components/
+│   │   ├── AssetInventory.tsx  # Dynamic deception canary asset table
+│   │   ├── AttackPathGraph.tsx # Interactive React Flow lateral movement diagram
+│   │   ├── AttackerProfileCard.tsx # Threat actor profiling and risk gauge
+│   │   ├── Header.tsx          # SOC status bar and simulator launcher
+│   │   ├── LiveCommandFeed.tsx # Real-time streaming terminal with filters
+│   │   ├── MetricsOverview.tsx # KPI summary cards
+│   │   ├── MitreHeatmap.tsx    # MITRE ATT&CK technique matrix visualizer
+│   │   └── SimulatorModal.tsx  # One-click demo scenario trigger modal
+│   └── package.json            # Next.js, React Flow, Tailwind dependencies
 ├── cowrie_config/
-│   ├── cowrie.cfg                # Honeypot configuration (AuthRandom credentials)
-│   └── honeyfs/                  # Fake filesystem hierarchy mounted into Cowrie
-│       ├── home/phil/{finance,git,aws,hr}/
-│       └── home/root/{finance,git,aws,hr}/
-├── cowrie_logs/                  # Host volume destination for cowrie.json stream
-├── templates/                    # Static source templates for synthetic enterprise assets
-│   ├── finance/                  # Payroll, budget, wire transfers, tax documents
-│   ├── git/                      # Git repositories, commit logs, database configs, .env
-│   ├── aws/                      # Credentials, S3 bucket dumps, EC2 instance mappings
-│   └── hr/                       # Employee directory, executive contracts, org chart
-├── docker-compose.yml            # Container definition for isolated Cowrie honeypot
-├── honeypot_sim.py               # Multi-session attack traffic generator
-├── start.sh                      # Automated unified launch and process management script
-├── requirements.txt              # Project dependencies
-├── .gitignore                    # Environment, database, and cache exclusions
-└── README.md                     # Technical documentation
+│   ├── cowrie.cfg              # Honeypot daemon configuration (AuthRandom enabled)
+│   └── honeyfs/                # Virtual filesystem mounted into container
+├── cowrie_logs/                # Real-time destination for cowrie.json event stream
+├── templates/                  # Source templates for synthetic enterprise bait
+│   ├── aws/                    # Mock credentials, S3 manifests, EC2 topologies
+│   ├── finance/                # Payroll CSVs, wire transfer memos, budgets
+│   ├── git/                    # Mock repos, .env templates, commit histories
+│   └── hr/                     # Employee directory, executive contracts, org charts
+├── docker-compose.yml          # Full multi-container stack orchestration
+├── honeypot_sim.py             # Multi-session attack traffic simulator
+├── start.sh                    # One-click unified local launch script
+├── requirements.txt            # Python dependencies
+└── README.md                   # System documentation
 ```
 
 ---
 
-## REST API Specification
+## 🚀 Quick Start Guide
 
-The FastAPI backend exposes endpoints for SIEM integration, status monitoring, and synthetic command injection:
+### Option 1: One-Click Local Launch (Recommended for Development)
 
-| Method | Endpoint | Description | Request Body / Parameters | Response Schema |
-| :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/` | Root service health check | None | `{"service": str, "status": str, "docs": str}` |
-| `GET` | `/api/status` | Comprehensive subsystem status | None | `{"status": str, "ollama": dict, "cowrie_log": dict, "metrics": dict}` |
-| `GET` | `/api/metrics` | Aggregate threat metrics | None | `{"total_sessions": int, "total_events": int, "total_assets_served": int, "avg_risk": float}` |
-| `GET` | `/api/sessions` | List all tracked attacker sessions | None | `Array[SessionObject]` |
-| `GET` | `/api/events` | Retrieve real-time event logs | `session_id` (optional), `limit` (int, default=100) | `Array[EventObject]` |
-| `POST` | `/api/classify` | Ad-hoc command classification | `{"command": "string"}` | `{"command": str, "category": str, "method": str, "files_served": list, "mitre": dict, "risk_score": int}` |
-| `POST` | `/api/simulate` | Ingest synthetic attack command | `{"session_id": str, "src_ip": str, "command": str, "scenario": str}` | `{"event_id": int, "session_id": str, "category": str, "mitre_tag": str, "risk_score": int}` |
-
----
-
-## Installation & Setup
-
-### Prerequisites
-
-* **Python:** Version 3.10 or higher
-* **Ollama (Optional, for LLM intent classification):**
-  ```bash
-  ollama serve
-  ollama pull qwen2.5:7b
-  ```
-  *If Ollama is not installed or running, HoneyNet automatically operates via its internal heuristic classifier with zero performance degradation.*
-* **Docker & Docker Compose (Optional, for real SSH honeypot):** Required only if hosting the live Cowrie container.
-
-### Step 1: Clone Repository & Setup Virtual Environment
+Ensure Python 3.10+ and Node.js 18+ are installed:
 
 ```bash
-git clone <repository-url>
+# 1. Clone repository
+git clone https://github.com/prathameshmore07/honeynet.git
 cd honeynet
 
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Step 2: Launch HoneyNet
-
-#### Method A: Automated One-Click Launcher (Recommended)
-
-```bash
+# 2. Make start script executable and run
 chmod +x start.sh
 ./start.sh
 ```
 
-This script:
-1. Validates the Python virtual environment and dependencies.
-2. Checks Ollama daemon availability and model readiness.
-3. Launches the Cowrie Docker container (if Docker is present).
-4. Spawns the FastAPI backend at `http://localhost:8000`.
-5. Launches the Streamlit dashboard at `http://localhost:8501`.
-6. Traps `SIGINT`/`SIGTERM` to ensure clean process termination upon shutdown.
-
-#### Method B: Manual Multi-Terminal Execution
-
-**Terminal 1: FastAPI Backend**
-```bash
-source .venv/bin/activate
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Terminal 2: Streamlit Threat Intelligence Dashboard**
-```bash
-source .venv/bin/activate
-streamlit run dashboard/dashboard.py --server.port 8501
-```
+The script will automatically:
+1. Initialize the Python virtual environment and install dependencies.
+2. Verify local Ollama status (or default to zero-downtime heuristic mode).
+3. Seed the Cowrie HoneyFS virtual filesystem from safe templates.
+4. Launch the **FastAPI Backend** on `http://localhost:8000`.
+5. Launch the **Next.js SOC Dashboard** on `http://localhost:3000`.
 
 ---
 
-## Verification & Testing Modes
+### Option 2: Full Docker Compose Orchestration
 
-### Mode 1: Multi-Session Attack Simulator
-
-Use `honeypot_sim.py` to generate authentic multi-session attack scenarios across all deception verticals without establishing manual SSH connections:
+Run the complete multi-service stack with a single command:
 
 ```bash
-# Execute all attack scenarios (Finance, Git, AWS, HR)
-python3 honeypot_sim.py --mode file --delay 0.5
-
-# Execute a single targeted scenario
-python3 honeypot_sim.py --scenario finance
-python3 honeypot_sim.py --scenario git
-python3 honeypot_sim.py --scenario aws
-python3 honeypot_sim.py --scenario hr
+docker compose up -d
 ```
 
-### Mode 2: Live SSH Honeypot Interaction
-
-If Cowrie is running via Docker Compose (`docker compose up -d`):
-
-1. Connect to the honeypot using SSH (any credentials are accepted via `AuthRandom`):
-   ```bash
-   ssh root@localhost -p 2222
-   # Password: <any string, e.g. 'admin123'>
-   ```
-
-2. Execute commands within the isolated fake filesystem:
-   ```bash
-   whoami
-   ls -la /home/phil/finance/
-   cat /home/phil/finance/Payroll_2026_Confidential.csv
-   cat /home/phil/git/.env
-   aws s3 ls
-   ```
-
-3. Open `http://localhost:8501` to observe real-time telemetry ingestion, intent classification tags, MITRE ATT&CK technique mapping, and dynamic asset reveal records.
-
-### Isolated Subsystem Verification
-
-| Subsystem | Validation Command | Expected Output |
-| :--- | :--- | :--- |
-| **Database & WAL Engine** | `python3 -c "import backend.db as db; db.init_db(); print('DB Initialized')"` | `DB Initialized` |
-| **Classifier Pipeline** | `python3 -c "from backend.classifier import classify_command; print(classify_command('cat .env'))"` | `('git', 'ai')` or `('git', 'heuristic')` |
-| **MITRE Mapping Engine** | `python3 -c "from backend.mitre_mapper import map_command_to_mitre; print(map_command_to_mitre('aws s3 ls', 'aws'))"` | `('T1526', 'Cloud Service Discovery', 50)` |
-| **FastAPI REST Endpoint** | `curl -s http://localhost:8000/api/status` | JSON response with status `"online"` |
+Services exposed:
+* 📊 **Next.js SOC Dashboard:** `http://localhost:3000`
+* 🔌 **FastAPI REST & WS Core:** `http://localhost:8000` (Swagger Docs: `/docs`)
+* 🍯 **Cowrie SSH Honeypot:** `localhost:2222` (User: `root` or `phil`, Password: `<any>`)
+* 🐘 **PostgreSQL 16:** `localhost:5432`
 
 ---
 
-## Security & Isolation Considerations
+## 🎯 Testing & Demo Simulator
 
-* **Container Isolation:** The Cowrie honeypot executes inside an isolated Docker container with bound host ports `2222` and `2223`. It has no access to the host's root filesystem or private networking interfaces.
-* **Synthetic Data Integrity:** All credentials, tokens, AWS keys (`AKIA...`), employee records, and payroll data provided in `templates/` and `honeyfs/` are synthetically generated for deception purposes and contain no real-world enterprise secrets.
-* **Non-Blocking Telemetry Ingestion:** The background log tailer processes events using an internal sliding window deduplicator to prevent Denial of Service (DoS) conditions against the database or AI inference pipeline from automated bot scripts.
+HoneyNet includes a built-in multi-scenario attack simulator that generates authentic Cowrie attack telemetry for live demonstrations.
+
+### Run via Dashboard:
+Click **"Launch Attack Simulator"** in the top navbar of the Next.js Dashboard and choose a campaign.
+
+### Run via Command Line:
+```bash
+# Execute the full multi-stage lateral movement APT campaign
+python3 honeypot_sim.py --scenario full_apt --delay 0.5
+
+# Run targeted credential hunt
+python3 honeypot_sim.py --scenario git --delay 0.3
+
+# Run cloud infrastructure reconnaissance
+python3 honeypot_sim.py --scenario aws --delay 0.4
+```
 
 ---
 
-## Roadmap & Planned Enhancements
+## 🔒 Synthetic Data & Honeypot Integrity
 
-* **Multi-Stage Lateral Movement Traps:** Chained deception environments simulating multi-tier networks (e.g., CI/CD server pivoting to internal Kubernetes clusters).
-* **Automated STIX/TAXII Export:** Real-time threat intelligence export to SIEM platforms and threat intelligence feeds.
-* **Dynamic Deception Generation:** Generation of novel, contextual files on-the-fly constrained within strict security guardrails.
-* **Distributed Honeynet Telemetry:** Unified ingestion across multiple geographically distributed sensor nodes.
-
----
-
-## License
-
-This project is licensed under the MIT License.
+* All credentials, tokens, AWS key IDs, payroll records, and employee data generated by HoneyNet are **100% synthetic honeypot canaries** created strictly for deception purposes.
+* All `.env` files and runtime filesystems are excluded from version control via `.gitignore`.
