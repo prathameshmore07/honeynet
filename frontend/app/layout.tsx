@@ -1,20 +1,22 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Mono, Inter } from "next/font/google";
+import { ReactQueryProvider } from "@/lib/queryClient";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const ibmPlexMono = IBM_Plex_Mono({
+  weight: ["400", "500", "600", "700"],
   subsets: ["latin"],
+  variable: "--font-ibm-plex-mono",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const inter = Inter({
   subsets: ["latin"],
+  variable: "--font-inter",
 });
 
 export const metadata: Metadata = {
-  title: "HoneyNet | AI-Powered Cyber Deception SOC Dashboard",
-  description: "Real-time AI attacker intent inference, lateral movement visualization, and dynamic honeypot deception platform.",
+  title: "HoneyNet | Forensics Lab SOC Threat Intelligence",
+  description: "Evidence-based cyber deception platform with real-time intent classification, lateral movement graphing, and autonomous canary infrastructure.",
 };
 
 export default function RootLayout({
@@ -25,10 +27,10 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      className={`${ibmPlexMono.variable} ${inter.variable} dark h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#090d16] text-slate-100 selection:bg-cyan-500 selection:text-black">
-        {children}
+      <body className="min-h-full flex flex-col bg-[#0B0D10] text-[#E8EAED] selection:bg-[#4A9EFF] selection:text-black">
+        <ReactQueryProvider>{children}</ReactQueryProvider>
       </body>
     </html>
   );

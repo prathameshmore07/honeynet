@@ -1,14 +1,27 @@
 """
 HoneyNet AI Intent Classifier
-Interacts with local Ollama with fallback heuristic classification.
+Interacts with local Ollama LLM with strict Pydantic validation
+and zero-latency heuristic regex fallback.
 """
 import re
 import logging
+import json
+import httpx
 import requests
-from typing import Tuple
+from typing import Tuple, Optional, List, Dict, Any
+from pydantic import BaseModel, Field, ValidationError
+
 from backend.config import OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT, CATEGORIES
 
 logger = logging.getLogger("honeynet.classifier")
+
+class OllamaIntentResult(BaseModel):
+    """Strict schema for Ollama AI structured output."""
+    intent: str = Field(default="other")
+    confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    suggested_assets: List[str] = Field(default_factory=list)
+    mitre_tags: List[str] = Field(default_factory=list)
+    goal_hypothesis: str = Field(default="")
 
 # Heuristic keyword matching patterns for fast/fallback classification
 HEURISTIC_PATTERNS = {
@@ -66,25 +79,27 @@ HEURISTIC_PATTERNS = {
         r"(?<![a-zA-Z0-9])ssn(?![a-zA-Z0-9])",
         r"(?<![a-zA-Z0-9])hr(?![a-zA-Z0-9])",
         r"(?<![a-zA-Z0-9])interview(?![a-zA-Z0-9])"
+    ],
+    "database": [
+        r"(?<![a-zA-Z0-9])postgres(?![a-zA-Z0-9])",
+        r"(?<![a-zA-Z0-9])psql(?![a-zA-Z0-9])",
+        r"(?<![a-zA-Z0-9])mysql(?![a-zA-Z0-9])",
+        r"(?<![a-zA-Z0-9])sqlite(?![a-zA-Z0-9])",
+        r"(?<![a-zA-Z0-9])dump(?![a-zA-Z0-9])",
+        r"(?<![a-zA-Z0-9])schema(?![a-zA-Z0-9])",
+        r"(?<![a-zA-Z0-9])select(?![a-zA-Z0-9])"
     ]
 }
 
 def normalize_response(raw_text: str) -> str:
-    """
-    Defensively parses and normalizes the AI model's response.
-    Handles markdown wrappers, prefixes (e.g. 'Category: finance'), and punctuation.
-    """
+    """Defensively parses and normalizes the AI model's response."""
     if not raw_text:
         return "other"
-    
     clean_text = raw_text.lower().strip()
     clean_text = re.sub(r"[`*_#\(\)\[\]:\"']", " ", clean_text)
-    
-    # Priority order matching for exact tokens
-    for cat in ["finance", "git", "aws", "hr", "other"]:
+    for cat in ["finance", "git", "aws", "hr", "database", "other"]:
         if re.search(rf"\b{cat}\b", clean_text):
             return cat
-            
     return "other"
 
 def classify_with_heuristic(command: str) -> str:
@@ -97,131 +112,74 @@ def classify_with_heuristic(command: str) -> str:
     return "other"
 
 def check_ollama_health() -> Tuple[bool, str]:
-    """
-    Checks if Ollama is running and whether the target model is available.
-    Returns (is_healthy, status_message).
-    """
+    """Checks whether local Ollama daemon is reachable."""
     try:
-        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2.0)
+        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=1.5)
         if resp.status_code == 200:
-            models = resp.json().get("models", [])
-            model_names = [m.get("name", "") for m in models]
-            
-            # Check if requested model (or base name) is present
-            target_base = OLLAMA_MODEL.split(":")[0]
-            matched = any(target_base in name for name in model_names)
-            
-            if matched:
-                return True, f"Ollama is running with model '{OLLAMA_MODEL}'."
-            else:
-                available_str = ", ".join(model_names) if model_names else "none"
-                return True, f"Ollama is up, but model '{OLLAMA_MODEL}' is not pulled yet (Available: {available_str}). Run: 'ollama pull {OLLAMA_MODEL}'."
-        return False, f"Ollama returned HTTP status {resp.status_code}."
-    except requests.exceptions.RequestException as e:
-        return False, f"Cannot connect to Ollama at {OLLAMA_URL} ({type(e).__name__}). Using heuristic classifier fallback."
-
-def warmup_classifier() -> None:
-    """Pre-warms the Ollama model at startup to avoid first-call latency."""
-    health_ok, msg = check_ollama_health()
-    logger.info(f"Ollama health check: {msg}")
-    
-    if not health_ok:
-        logger.warning("Skipping Ollama warmup; heuristic fallback is active.")
-        return
-        
-    try:
-        dummy_prompt = (
-            "Classify this attacker command into exactly one word: "
-            "finance, git, aws, hr, or other. Command: ls -la"
-        )
-        payload = {
-            "model": OLLAMA_MODEL,
-            "prompt": dummy_prompt,
-            "stream": False,
-            "options": {"temperature": 0.0, "num_predict": 10}
-        }
-        requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=OLLAMA_TIMEOUT)
-        logger.info("Ollama model successfully pre-warmed.")
+            data = resp.json()
+            models = [m.get("name", "") for m in data.get("models", [])]
+            has_model = any(OLLAMA_MODEL in m for m in models)
+            if has_model:
+                return True, f"Ollama operational ({OLLAMA_MODEL} active)"
+            return True, f"Ollama reachable ({len(models)} models available)"
+        return False, f"Ollama returned HTTP {resp.status_code}"
     except Exception as e:
-        logger.warning(f"Ollama warmup failed: {e}. Fallback heuristics will be used if needed.")
+        return False, f"Ollama offline ({type(e).__name__})"
+
+def classify_with_ollama(command: str) -> Tuple[str, Optional[OllamaIntentResult]]:
+    """Synchronous Ollama classification with strict Pydantic validation."""
+    prompt = (
+        f"You are a cybersecurity intent analyzer. An attacker executed: '{command}'.\n"
+        f"Classify intent into exactly one of: finance, git, aws, hr, database, other.\n"
+        f"Return ONLY valid JSON with keys: intent, confidence, suggested_assets, mitre_tags, goal_hypothesis."
+    )
+    
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0.0, "num_predict": 100}
+    }
+
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json=payload,
+            timeout=OLLAMA_TIMEOUT
+        )
+        if resp.status_code == 200:
+            raw_response = resp.json().get("response", "")
+            try:
+                parsed_json = json.loads(raw_response)
+                result = OllamaIntentResult(**parsed_json)
+                norm_cat = normalize_response(result.intent)
+                return norm_cat, result
+            except (json.JSONDecodeError, ValidationError):
+                norm_cat = normalize_response(raw_response)
+                return norm_cat, None
+    except Exception as e:
+        logger.debug(f"Ollama call skipped ({e})")
+    
+    return "other", None
 
 def classify_command(command: str) -> Tuple[str, str]:
     """
-    Classifies an attacker command into one of: finance, git, aws, hr, or other.
-    Returns tuple of (category, method_used: 'ai' | 'heuristic').
+    Two-Tier Intent Classifier:
+    1. Heuristic fast-path
+    2. Ollama LLM verification if ambiguous
     """
-    cmd = (command or "").strip()
-    if not cmd:
-        return "other", "heuristic"
+    heuristic_cat = classify_with_heuristic(command)
+    if heuristic_cat != "other":
+        return heuristic_cat, "heuristic_fast"
         
-    prompt = (
-        f"Classify this attacker command into exactly one word: "
-        f"finance, git, aws, hr, or other. Command: {cmd}"
-    )
-    
-    try:
-        payload = {
-            "model": OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.0,
-                "num_predict": 10
-            }
-        }
-        resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=OLLAMA_TIMEOUT)
-        if resp.status_code == 200:
-            raw_response = resp.json().get("response", "")
-            category = normalize_response(raw_response)
-            return category, "ai"
-    except Exception as e:
-        logger.debug(f"Ollama call failed or timed out ({e}). Falling back to heuristic classifier.")
+    ai_cat, _ = classify_with_ollama(command)
+    if ai_cat != "other":
+        return ai_cat, "ollama_ai"
         
-    # Heuristic fallback
-    category = classify_with_heuristic(cmd)
-    return category, "heuristic"
+    return "other", "default"
 
-def generate_attacker_summary(commands: list) -> str:
-    """
-    Generates a concise 1-2 sentence AI summary of attacker's intent.
-    Falls back to structured rule-based summary if Ollama is unavailable.
-    """
-    if not commands:
-        return "No commands executed in this session yet."
-        
-    cmd_sample = " | ".join(commands[-8:])
-    prompt = (
-        f"In one concise sentence (maximum 20 words), summarize what this cyber attacker is attempting to do: {cmd_sample}"
-    )
-    
-    try:
-        payload = {
-            "model": OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.2,
-                "num_predict": 40
-            }
-        }
-        resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=OLLAMA_TIMEOUT)
-        if resp.status_code == 200:
-            summary = resp.json().get("response", "").strip()
-            # Clean up summary
-            summary = summary.replace("\n", " ").strip('"\': ')
-            if len(summary) > 10:
-                return summary
-    except Exception:
-        pass
-        
-    # Heuristic summary
-    cats_found = set()
-    for c in commands:
-        cat = classify_with_heuristic(c)
-        if cat != "other":
-            cats_found.add(cat)
-            
-    if not cats_found:
-        return "Initial reconnaissance: Attacker is surveying the system environment and exploring directories."
-    cat_str = ", ".join(sorted(cats_found))
-    return f"Targeted credential & asset hunting: Attacker focused on accessing {cat_str} assets."
+def warmup_classifier():
+    """Initializes classifier and checks Ollama health."""
+    ok, msg = check_ollama_health()
+    logger.info(f"Ollama AI Health Check: {msg}")

@@ -31,6 +31,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honeynet -d honeynet_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - honeynet-internal
 
@@ -42,8 +47,10 @@ services:
     container_name: honeynet-backend
     restart: unless-stopped
     depends_on:
-      - postgres
-      - cowrie
+      postgres:
+        condition: service_healthy
+      cowrie:
+        condition: service_started
     ports:
       - "8000:8000"
     environment:
@@ -56,6 +63,11 @@ services:
       - ./cowrie_logs:/app/cowrie_logs
       - ./cowrie_config:/app/cowrie_config
       - ./templates:/app/templates
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     networks:
       - honeynet-internal
 
@@ -67,7 +79,8 @@ services:
     container_name: honeynet-frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_started
     ports:
       - "3000:3000"
     environment:

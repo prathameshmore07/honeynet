@@ -1,30 +1,28 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Header } from "@/components/Header";
-import { MetricsOverview } from "@/components/MetricsOverview";
-import { LiveCommandFeed, CommandEventItem } from "@/components/LiveCommandFeed";
-import { AttackPathGraph } from "@/components/AttackPathGraph";
-import { MitreHeatmap, MitreStat } from "@/components/MitreHeatmap";
-import { AttackerProfileCard, SessionData } from "@/components/AttackerProfileCard";
-import { AssetInventory, DeceptionAsset } from "@/components/AssetInventory";
-import { SimulatorModal } from "@/components/SimulatorModal";
-import { Node, Edge } from "@xyflow/react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Header } from "@/components/features/Header";
+import { MetricsOverview } from "@/components/features/MetricsOverview";
+import { AttackPathGraph } from "@/components/features/AttackPathGraph";
+import { AttackerProfileCard } from "@/components/features/AttackerProfileCard";
+import { LiveCommandFeed } from "@/components/features/LiveCommandFeed";
+import { MitreHeatmap } from "@/components/features/MitreHeatmap";
+import { AssetInventory } from "@/components/features/AssetInventory";
+import { SimulatorModal } from "@/components/features/SimulatorModal";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { api } from "@/lib/api";
+import { useWebSocket } from "@/lib/useWebSocket";
+import { CommandEvent } from "@/lib/schemas";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
-
-export default function SOCDashboard() {
-  const [wsConnected, setWsConnected] = useState<boolean>(false);
+export default function SOCForensicsDashboard() {
+  const queryClient = useQueryClient();
   const [isSimulatorOpen, setIsSimulatorOpen] = useState<boolean>(false);
-
-  // Data States
-  const [events, setEvents] = useState<CommandEventItem[]>([]);
-  const [sessions, setSessions] = useState<SessionData[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [assets, setAssets] = useState<DeceptionAsset[]>([]);
-  const [mitreStats, setMitreStats] = useState<MitreStat[]>([]);
-  const [overviewMetrics, setOverviewMetrics] = useState({
+  const [localEvents, setLocalEvents] = useState<CommandEvent[]>([]);
+
+  // 1. TanStack Query Hooks for Telemetry Data
+  const { data: overview = {
     total_sessions: 0,
     active_attackers: 0,
     total_commands: 0,
@@ -32,203 +30,157 @@ export default function SOCDashboard() {
     avg_risk_score: 0,
     highest_risk_score: 0,
     top_intent: "None",
-    ollama_status: "Checking...",
+    ollama_status: "Active",
     cowrie_status: "Active",
+  } } = useQuery({
+    queryKey: ["overview"],
+    queryFn: api.getOverview,
+    refetchInterval: 4000,
   });
 
-  const [graphData, setGraphData] = useState<{ nodes: Node[]; edges: Edge[] }>({
-    nodes: [],
-    edges: [],
+  const { data: sessions = [] } = useQuery({
+    queryKey: ["sessions"],
+    queryFn: api.getSessions,
+    refetchInterval: 4000,
   });
 
-  const wsRef = useRef<WebSocket | null>(null);
+  const { data: initialEvents = [] } = useQuery({
+    queryKey: ["events"],
+    queryFn: () => api.getEvents(120),
+  });
 
-  // 1. Initial REST API Data Load
-  const fetchAllData = useCallback(async () => {
-    try {
-      const [overviewRes, eventsRes, sessionsRes, assetsRes, mitreRes] = await Promise.allSettled([
-        fetch(`${API_BASE}/api/overview`).then((r) => r.json()),
-        fetch(`${API_BASE}/api/events?limit=150`).then((r) => r.json()),
-        fetch(`${API_BASE}/api/sessions`).then((r) => r.json()),
-        fetch(`${API_BASE}/api/assets`).then((r) => r.json()),
-        fetch(`${API_BASE}/api/mitre-matrix`).then((r) => r.json()),
-      ]);
+  const { data: assets = [] } = useQuery({
+    queryKey: ["assets"],
+    queryFn: api.getAssets,
+    refetchInterval: 4000,
+  });
 
-      if (overviewRes.status === "fulfilled") setOverviewMetrics(overviewRes.value);
-      if (eventsRes.status === "fulfilled") setEvents(eventsRes.value);
-      if (sessionsRes.status === "fulfilled") {
-        setSessions(sessionsRes.value);
-        if (sessionsRes.value.length > 0 && !selectedSessionId) {
-          setSelectedSessionId(sessionsRes.value[0].session_id);
-        }
-      }
-      if (assetsRes.status === "fulfilled") setAssets(assetsRes.value);
-      if (mitreRes.status === "fulfilled") setMitreStats(mitreRes.value);
-    } catch (err) {
-      console.warn("REST API polling notice:", err);
+  const { data: mitreStats = [] } = useQuery({
+    queryKey: ["mitre"],
+    queryFn: api.getMitreMatrix,
+    refetchInterval: 4000,
+  });
+
+  // Default selected session
+  useEffect(() => {
+    if (sessions.length > 0 && !selectedSessionId) {
+      setSelectedSessionId(sessions[0].session_id);
     }
-  }, [selectedSessionId]);
+  }, [sessions, selectedSessionId]);
 
-  // 2. Fetch Attack Path Graph for Selected Session
-  const fetchAttackPath = useCallback(async (sessionId: string) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/attack-path/${sessionId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setGraphData(data);
-      }
-    } catch (err) {
-      console.warn("Attack path fetch notice:", err);
+  // Sync initial events into buffer
+  useEffect(() => {
+    if (initialEvents.length > 0 && localEvents.length === 0) {
+      setLocalEvents(initialEvents);
     }
+  }, [initialEvents, localEvents.length]);
+
+  // Active Session Attack Path
+  const activeSessionKey = selectedSessionId || (sessions[0]?.session_id ?? "");
+  const { data: graphData = { nodes: [], edges: [] } } = useQuery({
+    queryKey: ["attackPath", activeSessionKey],
+    queryFn: () => api.getAttackPath(activeSessionKey),
+    enabled: true,
+    refetchInterval: 3000,
+  });
+
+  // 2. Real-time WebSocket Ingestion
+  const handleCommandEvent = useCallback((event: CommandEvent) => {
+    setLocalEvents((prev) => [event, ...prev.slice(0, 199)]);
   }, []);
 
-  useEffect(() => {
-    fetchAllData();
-  }, [fetchAllData]);
-
-  useEffect(() => {
-    if (selectedSessionId) {
-      fetchAttackPath(selectedSessionId);
+  const handleRefresh = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["overview"] });
+    queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    queryClient.invalidateQueries({ queryKey: ["assets"] });
+    queryClient.invalidateQueries({ queryKey: ["mitre"] });
+    if (activeSessionKey) {
+      queryClient.invalidateQueries({ queryKey: ["attackPath", activeSessionKey] });
     }
-  }, [selectedSessionId, fetchAttackPath]);
+  }, [queryClient, activeSessionKey]);
 
-  // 3. WebSocket Real-Time Telemetry Stream
-  useEffect(() => {
-    let reconnectTimeout: NodeJS.Timeout;
+  const { isConnected: wsConnected, latencyMs } = useWebSocket({
+    onCommandEvent: handleCommandEvent,
+    onRefreshNeeded: handleRefresh,
+  });
 
-    const connectWebSocket = () => {
-      try {
-        const ws = new WebSocket(`${WS_BASE}/ws/live`);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          setWsConnected(true);
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === "command_event") {
-              const newEvt: CommandEventItem = msg.data;
-              setEvents((prev) => [newEvt, ...prev.slice(0, 199)]);
-
-              // Update overview stats
-              setOverviewMetrics((prev) => ({
-                ...prev,
-                total_commands: prev.total_commands + 1,
-                highest_risk_score: Math.max(prev.highest_risk_score, newEvt.session_risk_score || 0),
-              }));
-
-              // Refresh active session and attack path
-              fetchAllData();
-            } else if (msg.type === "asset_created") {
-              fetchAllData();
-            }
-          } catch (e) {
-            console.error("WS parse error:", e);
-          }
-        };
-
-        ws.onclose = () => {
-          setWsConnected(false);
-          reconnectTimeout = setTimeout(connectWebSocket, 2500);
-        };
-
-        ws.onerror = () => {
-          setWsConnected(false);
-        };
-      } catch (e) {
-        reconnectTimeout = setTimeout(connectWebSocket, 2500);
-      }
-    };
-
-    connectWebSocket();
-
-    return () => {
-      clearTimeout(reconnectTimeout);
-      if (wsRef.current) wsRef.current.close();
-    };
-  }, [fetchAllData]);
-
-  // 4. Trigger Attack Simulator from Dashboard
+  // 3. Trigger Simulator
   const handleTriggerSimulation = async (scenario: string, delay: number) => {
-    const res = await fetch(`${API_BASE}/api/simulator/trigger`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenario, delay }),
-    });
-    if (!res.ok) {
-      throw new Error(`Simulation failed: ${res.statusText}`);
-    }
+    await api.triggerSimulation(scenario, delay);
   };
 
   const selectedSessionData =
     sessions.find((s) => s.session_id === selectedSessionId) || (sessions[0] ?? null);
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-black">
-      {/* Top Navbar */}
+    <div className="min-h-screen bg-[#0B0D10] text-[#E8EAED] flex flex-col font-sans selection:bg-[#4A9EFF] selection:text-black">
+      {/* Forensics Lab Status Header */}
       <Header
         wsConnected={wsConnected}
-        ollamaStatus={overviewMetrics.ollama_status}
-        cowrieStatus={overviewMetrics.cowrie_status}
+        latencyMs={latencyMs}
+        ollamaStatus={overview.ollama_status}
+        cowrieStatus={overview.cowrie_status}
         onOpenSimulator={() => setIsSimulatorOpen(true)}
       />
 
-      {/* Main SOC Dashboard Grid */}
-      <main className="flex-1 max-w-[1720px] w-full mx-auto p-4 sm:p-6 space-y-6">
-        {/* KPI Metrics Strip */}
-        <MetricsOverview
-          totalSessions={overviewMetrics.total_sessions}
-          activeAttackers={overviewMetrics.active_attackers}
-          totalCommands={overviewMetrics.total_commands}
-          assetsDeployed={overviewMetrics.assets_deployed}
-          avgRiskScore={overviewMetrics.avg_risk_score}
-          highestRiskScore={overviewMetrics.highest_risk_score}
-          topIntent={overviewMetrics.top_intent}
-        />
+      {/* Main Forensics Workspace */}
+      <main className="flex-1 max-w-[1780px] w-full mx-auto p-4 sm:p-5 space-y-4">
+        {/* KPI Telemetry Strip */}
+        <ErrorBoundary panelName="Metrics Overview">
+          <MetricsOverview metrics={overview} />
+        </ErrorBoundary>
 
-        {/* Core Live Terminal & Attacker Profiling Intelligence */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-7 xl:col-span-8">
-            <LiveCommandFeed
-              events={events}
-              onClear={() => setEvents([])}
-              selectedSession={selectedSessionId}
-              onSelectSession={(sId) => setSelectedSessionId(sId || null)}
-            />
+        {/* HERO SECTION: Asymmetric Viewport (React Flow 60% Width + Dossier 40%) */}
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+          <div className="xl:col-span-7">
+            <ErrorBoundary panelName="Lateral Movement Graph">
+              <AttackPathGraph
+                graphData={graphData}
+                selectedSession={selectedSessionId}
+              />
+            </ErrorBoundary>
           </div>
 
-          <div className="lg:col-span-5 xl:col-span-4">
-            <AttackerProfileCard
-              session={selectedSessionData}
-              onSelectSession={(sId) => setSelectedSessionId(sId)}
-              allSessions={sessions}
-            />
+          <div className="xl:col-span-5">
+            <ErrorBoundary panelName="Attacker Attribution Dossier">
+              <AttackerProfileCard
+                session={selectedSessionData}
+                onSelectSession={(sId) => setSelectedSessionId(sId)}
+                allSessions={sessions}
+              />
+            </ErrorBoundary>
           </div>
         </div>
 
-        {/* Interactive React Flow Lateral Movement Graph */}
+        {/* SECONDARY ROW: Live Terminal & MITRE Matrix */}
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+          <div className="xl:col-span-7">
+            <ErrorBoundary panelName="Live Command Terminal">
+              <LiveCommandFeed
+                events={localEvents}
+                onClear={() => setLocalEvents([])}
+                selectedSession={selectedSessionId}
+                onSelectSession={(sId) => setSelectedSessionId(sId || null)}
+              />
+            </ErrorBoundary>
+          </div>
+
+          <div className="xl:col-span-5">
+            <ErrorBoundary panelName="MITRE ATT&CK Matrix">
+              <MitreHeatmap stats={mitreStats} />
+            </ErrorBoundary>
+          </div>
+        </div>
+
+        {/* TERTIARY ROW: Deception Evidence Vault */}
         <div className="w-full">
-          <AttackPathGraph
-            graphData={graphData}
-            selectedSession={selectedSessionId}
-          />
-        </div>
-
-        {/* MITRE ATT&CK Matrix & Deception Asset Inventory */}
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-          <div className="xl:col-span-6">
-            <MitreHeatmap stats={mitreStats} />
-          </div>
-
-          <div className="xl:col-span-6">
+          <ErrorBoundary panelName="Deception Honeytoken Vault">
             <AssetInventory assets={assets} />
-          </div>
+          </ErrorBoundary>
         </div>
       </main>
 
-      {/* Attack Simulator Modal */}
+      {/* Campaign Simulator Dialog */}
       <SimulatorModal
         isOpen={isSimulatorOpen}
         onClose={() => setIsSimulatorOpen(false)}

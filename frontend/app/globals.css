@@ -1,68 +1,90 @@
 @import "tailwindcss";
 @import "@xyflow/react/dist/style.css";
 
-:root {
-  --background: #090d16;
-  --foreground: #f1f5f9;
-  --card-bg: #0f172a;
-  --card-border: #1e293b;
-  --accent-cyan: #06b6d4;
-  --accent-emerald: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
+@layer base {
+  :root {
+    --bg-canvas: #0B0D10;
+    --card-surface: #14171C;
+    --card-hover: #191D24;
+    --border-subtle: #222730;
+    --border-muted: #1A1E26;
+    --text-primary: #E8EAED;
+    --text-secondary: #8B92A0;
+    --accent-risk: #E85D4E;
+    --accent-info: #4A9EFF;
+    --signal-mitre: #D4A94E;
+    --signal-success: #36B37E;
+  }
+
+  body {
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow-x: hidden;
+    letter-spacing: -0.01em;
+  }
+
+  /* Monospace headers and tabular data */
+  .font-mono-header {
+    font-family: var(--font-ibm-plex-mono), monospace;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
 }
 
-body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  overflow-x: hidden;
-}
-
-/* Custom Scrollbar for Terminals & Lists */
+/* Restrained Forensics Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: #0B0D10;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 3px;
+  background: #222730;
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #333C4A;
 }
 
-/* React Flow Dark SOC Custom Styles */
+/* React Flow Forensics Canvas Styles */
 .react-flow__background {
-  background-color: #0b1120 !important;
+  background-color: #0E1116 !important;
 }
 .react-flow__controls {
-  background-color: #0f172a !important;
-  border: 1px solid #1e293b !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+  background-color: #14171C !important;
+  border: 1px solid #222730 !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6) !important;
+  border-radius: 8px !important;
 }
 .react-flow__controls-button {
-  background-color: #0f172a !important;
-  border-bottom: 1px solid #1e293b !important;
-  fill: #94a3b8 !important;
+  background-color: #14171C !important;
+  border-bottom: 1px solid #222730 !important;
+  fill: #8B92A0 !important;
 }
 .react-flow__controls-button:hover {
-  background-color: #1e293b !important;
-  fill: #06b6d4 !important;
+  background-color: #1E232B !important;
+  fill: #4A9EFF !important;
 }
 .react-flow__attribution {
   display: none !important;
 }
 
-/* Terminal Pulse Animation */
-@keyframes pulse-subtle {
+/* Terminal Cursor Blink */
+@keyframes blink {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  50% { opacity: 0; }
 }
 
-.animate-pulse-subtle {
-  animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+.animate-cursor-blink {
+  animation: blink 1s step-start infinite;
+}
+
+/* Respect Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

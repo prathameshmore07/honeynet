@@ -27,8 +27,7 @@ from backend.db import (
 from backend.classifier import (
     check_ollama_health,
     warmup_classifier,
-    classify_command,
-    generate_attacker_summary
+    classify_command
 )
 from backend.mitre_mapper import map_command_to_mitre
 from backend.asset_manager import seed_honeyfs_from_templates
