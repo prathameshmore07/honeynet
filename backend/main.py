@@ -10,26 +10,22 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from backend.config import COWRIE_LOG_PATH, OLLAMA_MODEL, OLLAMA_URL
 from backend.db import (
     init_db,
     get_all_sessions,
     get_session_by_id,
-    get_events_by_session,
     get_all_events,
     get_overview_metrics,
     get_all_assets,
-    get_mitre_statistics,
-    record_event
+    get_mitre_statistics
 )
 from backend.classifier import (
     check_ollama_health,
     warmup_classifier,
     classify_command
 )
-from backend.mitre_mapper import map_command_to_mitre
 from backend.asset_manager import seed_honeyfs_from_templates
 from backend.expansion_engine import build_attack_path_graph
 from backend.log_tailer import CowrieLogTailer
@@ -49,7 +45,7 @@ tailer_thread: Optional[threading.Thread] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize database, seed honeyfs, pre-warm LLM, launch background tailer."""
-    logger.info("Initializing HoneyNet SQLite/Postgres Database...")
+    logger.info("Initializing HoneyNet Embedded-Document Database...")
     init_db()
     
     # Store main event loop for thread-safe WebSocket broadcasts
@@ -57,29 +53,38 @@ async def lifespan(app: FastAPI):
     set_main_event_loop(loop)
 
     logger.info("Ensuring HoneyFS virtual filesystem is seeded...")
-    seed_honeyfs_from_templates()
-    
-    logger.info("Checking Ollama AI health and pre-warming...")
+    try:
+        seed_honeyfs_from_templates()
+    except Exception as e:
+        logger.warning(f"HoneyFS seed warning: {e}")
+
+    logger.info("Checking native Ollama LLM readiness...")
     warmup_classifier()
-    
+
+    # Start background Cowrie log tailer
     global tailer_thread
-    logger.info("Starting Cowrie Log Tailer background worker...")
-    tailer_thread = threading.Thread(target=tailer_instance.run_loop, args=(0.5,), daemon=True)
+    tailer_thread = threading.Thread(
+        target=tailer_instance.run_loop,
+        kwargs={"poll_interval": 0.5},
+        daemon=True
+    )
     tailer_thread.start()
-    
+    logger.info("HoneyNet Ingestion & Defense Core is fully armed.")
+
     yield
-    
-    logger.info("Shutting down HoneyNet background worker...")
+
+    # Cleanup on shutdown
+    logger.info("Stopping HoneyNet Log Tailer...")
     tailer_instance.stop()
 
 app = FastAPI(
-    title="HoneyNet AI Adaptive Honeypot API",
-    description="Real-time attacker intent classification and forensic telemetry API",
-    version="2.0.0",
+    title="HoneyNet Forensics Core",
+    description="AI-Driven Cyber Deception & Autonomous Honeytoken Infrastructure",
+    version="2.1.0",
     lifespan=lifespan
 )
 
-# Enable CORS for Next.js and external dashboards
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -89,31 +94,34 @@ app.add_middleware(
 )
 
 # -----------------------------------------------------------------------------
-# WebSocket Endpoint for Live SOC Streaming
+# WebSocket Live Streaming Endpoint
 # -----------------------------------------------------------------------------
 @app.websocket("/ws/live")
 async def websocket_live_feed(websocket: WebSocket):
-    """Real-time bidirectional WebSocket stream for live command feeds and risk alerts."""
+    """
+    Bidirectional WebSocket connection for live telemetry streaming.
+    Pushes:
+      - 'command_event' (real-time adversary inputs & risk scores)
+      - 'asset_created' (dynamic honeytokens deployed)
+      - 'threat_alert' (severity threshold breaches)
+    """
     await ws_manager.connect(websocket)
     try:
-        # Send initial welcome and snapshot
-        overview = get_overview_metrics()
+        # Push initial status handshake
         await websocket.send_json({
-            "type": "connection_established",
-            "data": {
-                "message": "Connected to HoneyNet Real-Time Threat Stream",
-                "overview": overview
-            }
+            "type": "handshake",
+            "message": "Connected to HoneyNet Real-Time Telemetry Bus",
+            "active_clients": len(ws_manager.active_connections)
         })
         while True:
-            # Keep connection alive and accept optional client pings
+            # Keep-alive heartbeat & ping receiver
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
     except Exception as e:
-        logger.warning(f"WebSocket error: {e}")
+        logger.debug(f"WebSocket client disconnected ({e})")
         ws_manager.disconnect(websocket)
 
 # -----------------------------------------------------------------------------
@@ -124,7 +132,7 @@ def root():
     return {
         "service": "HoneyNet AI Adaptive Honeynet SOC Core",
         "status": "operational",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "docs": "/docs",
         "websocket": "/ws/live"
     }
@@ -154,8 +162,8 @@ def get_dashboard_overview():
     """Returns top-level SOC telemetry metrics."""
     metrics = get_overview_metrics()
     ollama_ok, _ = check_ollama_health()
-    metrics["ollama_status"] = "Active" if ollama_ok else "Heuristic Mode"
-    metrics["cowrie_status"] = "Active" if COWRIE_LOG_PATH.exists() else "Standby"
+    metrics.ollama_status = "Active (Native M4)" if ollama_ok else "Heuristic Engine"
+    metrics.cowrie_status = "Listening (:2222)" if COWRIE_LOG_PATH.exists() else "Standby"
     return metrics
 
 @app.get("/api/sessions")
@@ -169,11 +177,7 @@ def get_session_detail(session_id: str):
     session = get_session_by_id(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    events = get_events_by_session(session_id)
-    return {
-        "session": session,
-        "events": events
-    }
+    return session
 
 @app.get("/api/events")
 def list_events(
@@ -182,12 +186,11 @@ def list_events(
     limit: int = Query(100, le=500)
 ):
     """Returns recent command execution events with optional filters."""
+    events = get_all_events(limit=limit)
     if session_id:
-        events = get_events_by_session(session_id)
-    else:
-        events = get_all_events(limit=limit)
+        events = [e for e in events if e.session_id == session_id]
     if category and category != "all":
-        events = [e for e in events if e.get("category") == category]
+        events = [e for e in events if e.category == category]
     return events
 
 @app.get("/api/attack-path/{session_id}")
@@ -195,10 +198,9 @@ def get_session_attack_path(session_id: str):
     """Constructs React Flow graph nodes and edges representing attacker lateral movement."""
     session = get_session_by_id(session_id)
     if not session:
-        # Return base topology if session not found
         return build_attack_path_graph([], 0)
-    cats = session.get("categories_triggered", [])
-    risk = session.get("risk_score", 10)
+    cats = session.categories_triggered
+    risk = session.attacker_profile.risk_score
     return build_attack_path_graph(cats, risk)
 
 @app.get("/api/mitre-matrix")
@@ -222,7 +224,7 @@ def trigger_attack_simulation(req: SimulatorTriggerRequest):
     """
     from honeypot_sim import run_simulation
     
-    scenarios = [req.scenario] if req.scenario != "full_apt" else ["git", "aws", "finance", "hr"]
+    scenarios = [req.scenario] if req.scenario != "full_apt" else ["finance", "git", "aws"]
     
     def _sim_worker():
         try:
@@ -240,6 +242,6 @@ def trigger_attack_simulation(req: SimulatorTriggerRequest):
     return {
         "status": "triggered",
         "scenario": req.scenario,
-        "scenarios_queued": scenarios,
+        "delay": req.delay,
         "message": f"Simulation scenario '{req.scenario}' started successfully."
     }

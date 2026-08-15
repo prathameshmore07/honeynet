@@ -1,11 +1,18 @@
 version: '3.8'
 
+# ==============================================================================
+# HoneyNet Multi-Container Orchestration (M4 Hardware Optimized)
+# Strict memory caps: Total Docker footprint < 3GB RAM (within 16GB limit)
+# Native Ollama runs on host macOS for Metal/MLX hardware acceleration
+# ==============================================================================
+
 services:
-  # 1. Cowrie SSH / Telnet Honeypot
+  # 1. Cowrie SSH / Telnet Honeypot Container
   cowrie:
     image: cowrie/cowrie:latest
     container_name: honeynet-cowrie
     restart: unless-stopped
+    mem_limit: 512m
     ports:
       - "2222:2222"
       - "2223:2223"
@@ -18,21 +25,18 @@ services:
     networks:
       - honeynet-internal
 
-  # 2. PostgreSQL 16 Database
-  postgres:
-    image: postgres:16-alpine
-    container_name: honeynet-postgres
+  # 2. MongoDB 7.0 (Official Document Store)
+  mongodb:
+    image: mongo:7.0
+    container_name: honeynet-mongo
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: honeynet
-      POSTGRES_PASSWORD: honeynet_secure_password_2026
-      POSTGRES_DB: honeynet_db
+    mem_limit: 1g
     ports:
-      - "5432:5432"
+      - "27017:27017"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mongo_data:/data/db
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U honeynet -d honeynet_db"]
+      test: ["CMD-SHELL", "mongosh --eval 'db.runCommand({ping:1})' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -46,19 +50,22 @@ services:
       dockerfile: backend/Dockerfile
     container_name: honeynet-backend
     restart: unless-stopped
+    mem_limit: 1g
     depends_on:
-      postgres:
+      mongodb:
         condition: service_healthy
       cowrie:
         condition: service_started
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://honeynet:honeynet_secure_password_2026@postgres:5432/honeynet_db
-      - HONEYNET_DB_PATH=/app/honeynet.db
+      - MONGO_URI=mongodb://mongodb:27017/honeynet_db
+      - DATABASE_URL=mongodb://mongodb:27017/honeynet_db
       - COWRIE_LOG_PATH=/app/cowrie_logs/cowrie.json
-      - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=qwen2.5:7b
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=qwen2.5:3b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./cowrie_logs:/app/cowrie_logs
       - ./cowrie_config:/app/cowrie_config
@@ -71,13 +78,14 @@ services:
     networks:
       - honeynet-internal
 
-  # 4. Next.js SOC Threat Intelligence Dashboard
+  # 4. Next.js SOC Forensics Dashboard
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: honeynet-frontend
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       backend:
         condition: service_started
@@ -89,22 +97,9 @@ services:
     networks:
       - honeynet-internal
 
-  # 5. Local Ollama AI Engine (Optional local container)
-  ollama:
-    image: ollama/ollama:latest
-    container_name: honeynet-ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    networks:
-      - honeynet-internal
-
 networks:
   honeynet-internal:
     driver: bridge
 
 volumes:
-  postgres_data:
-  ollama_models:
+  mongo_data:

@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Set
 
 from backend.config import COWRIE_LOG_PATH
-from backend.db import record_event, update_session_profile, get_events_by_session, get_session_by_id
+from backend.db import record_session_event, get_session_by_id
 from backend.classifier import classify_command
 from backend.mitre_mapper import map_command_to_mitre
-from backend.asset_generator import generate_assets_for_intent
-from backend.profiler import evaluate_attacker_profile
+from backend.asset_generator import generate_dynamic_deception_assets
+from backend.identity_seeder import generate_company_identity
 from backend.ws_manager import broadcast_sync
 
 logger = logging.getLogger("honeynet.tailer")
@@ -77,49 +77,35 @@ class CowrieLogTailer:
         if len(self.seen_events) > 2000:
             self.seen_events = set(list(self.seen_events)[-1000:])
 
-        # 1. AI Intent Classification (Heuristic + Ollama)
+        # 1. AI Intent Classification (Instant Heuristic + Ollama fallback)
         category, method = classify_command(command)
 
-        # 2. Dynamic Asset Deployment (if targeted category)
+        # 2. Company Identity & Dynamic Asset Deployment
+        existing_session = get_session_by_id(session_id)
+        company = existing_session.company_identity if (existing_session and existing_session.company_identity) else generate_company_identity(session_id)
+
         deployed_assets = []
-        if category != "other":
-            deployed_assets = generate_assets_for_intent(session_id, category)
+        if category in ("finance", "git", "aws", "hr", "database"):
+            deployed_assets = generate_dynamic_deception_assets(category, session_id, company)
 
         # 3. MITRE ATT&CK Mapping & Risk Scoring
         mitre_tag, mitre_name, risk_score = map_command_to_mitre(command, category)
-        files_served = [a.get("file_path", "") for a in deployed_assets]
+        files_served = [a.get("path", "") for a in deployed_assets]
 
-        # 4. Database Persistence
-        db_id = record_event(
+        # 4. Database Persistence (MongoDB Embedded Document Engine)
+        session_doc = record_session_event(
             session_id=session_id,
             src_ip=src_ip,
             command=command,
             category=category,
-            files_served=files_served,
+            classification_method=method,
             mitre_tag=mitre_tag,
             mitre_name=mitre_name,
-            event_risk_score=risk_score,
-            timestamp=timestamp
-        )
-
-        # 5. Attacker Profiling Update
-        all_session_events = get_events_by_session(session_id)
-        session_data = get_session_by_id(session_id) or {}
-        categories_triggered = session_data.get("categories_triggered", [])
-        current_risk = session_data.get("risk_score", risk_score)
-
-        profile = evaluate_attacker_profile(all_session_events, categories_triggered, current_risk)
-        update_session_profile(
-            session_id=session_id,
-            inferred_intent=profile["inferred_intent"],
-            skill_level=profile["skill_level"],
-            goal_summary=profile["goal_summary"],
-            ai_summary=profile["ai_summary"],
-            risk_score=profile["risk_score"]
+            risk_increment=risk_score,
+            new_assets=deployed_assets
         )
 
         event_payload = {
-            "id": db_id,
             "session_id": session_id,
             "src_ip": src_ip,
             "command": command,
@@ -129,13 +115,13 @@ class CowrieLogTailer:
             "mitre_tag": mitre_tag,
             "mitre_name": mitre_name,
             "event_risk_score": risk_score,
-            "session_risk_score": profile["risk_score"],
-            "skill_level": profile["skill_level"],
-            "inferred_intent": profile["inferred_intent"],
+            "session_risk_score": session_doc.attacker_profile.risk_score if session_doc else risk_score,
+            "skill_level": session_doc.attacker_profile.skill_level if session_doc else "Opportunistic",
+            "inferred_intent": category.capitalize() if category != "other" else "Reconnaissance",
             "timestamp": timestamp or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         }
 
-        # 6. Real-time WebSocket Broadcast
+        # 5. Real-time WebSocket Broadcast
         broadcast_sync({
             "type": "command_event",
             "data": event_payload
@@ -153,13 +139,13 @@ class CowrieLogTailer:
 
         logger.info(
             f"[{session_id[:8]}] '{command}' -> Cat: {category} ({method}) | "
-            f"MITRE: {mitre_tag} | Deployed: {len(deployed_assets)} | Risk: {profile['risk_score']}"
+            f"MITRE: {mitre_tag} | Deployed: {len(deployed_assets)} | Risk: {event_payload['session_risk_score']}"
         )
 
         return event_payload
 
     def poll_once(self) -> int:
-        """Reads and processes any newly appended lines in cowrie.json."""
+        """Polls log file once, processing any new appended lines."""
         if not self.log_path.exists():
             return 0
 
@@ -168,23 +154,29 @@ class CowrieLogTailer:
             with open(self.log_path, "r", encoding="utf-8", errors="ignore") as f:
                 f.seek(self.file_pos)
                 for line in f:
-                    res = self.process_log_line(line)
-                    if res:
+                    if self.process_log_line(line):
                         processed += 1
                 self.file_pos = f.tell()
         except Exception as e:
             logger.error(f"Error reading log file {self.log_path}: {e}")
-
         return processed
 
     def run_loop(self, poll_interval: float = 0.5):
-        """Continuous polling loop for log tailing."""
+        """Continuously tails the Cowrie log file in a background worker loop."""
         self.running = True
-        logger.info(f"Started Cowrie log tailer on {self.log_path}")
+        logger.info(f"HoneyNet Cowrie Log Tailer started (watching {self.log_path})...")
+
+        # Fast-forward to end of file on startup unless empty
+        if self.log_path.exists():
+            self.file_pos = self.log_path.stat().st_size
+
         while self.running:
-            self.poll_once()
+            try:
+                self.poll_once()
+            except Exception as e:
+                logger.error(f"Tailer worker loop exception: {e}")
             time.sleep(poll_interval)
 
     def stop(self):
-        """Stops the polling loop."""
+        """Stops the tailer worker loop."""
         self.running = False

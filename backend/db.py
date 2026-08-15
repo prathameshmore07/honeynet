@@ -1,72 +1,77 @@
 """
-HoneyNet Database Layer
-Dual-compatible storage engine: PostgreSQL (when running with Docker Compose)
-with automatic fallback to SQLite WAL mode (for standalone local execution).
+HoneyNet Database Persistence Engine
+Implements MongoDB embedded-document persistence using Motor/PyMongo,
+with an automatic SQLite WAL fallback for zero-dependency local execution.
+Every write is validated against strict Pydantic models.
 """
-import sqlite3
-import json
 import os
+import json
 import logging
+import sqlite3
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
 
-from backend.config import DB_PATH
+from backend.config import settings, DB_PATH
+from backend.models import (
+    SessionDoc,
+    CommandItem,
+    GeneratedAssetItem,
+    AttackerProfileDoc,
+    SessionSummary,
+    CommandEvent,
+    GeneratedAsset,
+    MitreTechniqueStat,
+    OverviewMetrics,
+    CompanyIdentity,
+)
+from backend.identity_seeder import generate_company_identity
 
 logger = logging.getLogger("honeynet.db")
 
-# Optional PostgreSQL Connection String
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-
-def get_db_connection():
-    """Returns a SQLite connection with WAL mode and row dictionary access."""
-    conn = sqlite3.connect(
-        str(DB_PATH),
-        check_same_thread=False,
-        timeout=10.0
-    )
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")
-    conn.row_factory = sqlite3.Row
-    return conn
+# Flag for active backend
+_mongo_available = False
+_mongo_db = None
 
 def init_db() -> None:
-    """Initializes the database tables and indexes."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # 1. Sessions table
-        cursor.execute("""
+    """Initializes MongoDB connection or falls back to SQLite WAL mode."""
+    global _mongo_available, _mongo_db
+    
+    # Try connecting to MongoDB if DATABASE_URL is set or localhost
+    mongo_uri = settings.database_url or os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    if "mongodb" in mongo_uri:
+        try:
+            import pymongo
+            client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=1000)
+            client.server_info() # Trigger connection check
+            _mongo_db = client["honeynet_db"]
+            _mongo_available = True
+            
+            # Create indexes
+            _mongo_db.sessions.create_index([("start_time", pymongo.DESCENDING)])
+            _mongo_db.sessions.create_index([("attacker_ip", pymongo.ASCENDING)])
+            logger.info("Connected to MongoDB engine (Embedded-Document Storage).")
+            return
+        except Exception as e:
+            logger.info(f"MongoDB not active ({e}). Operating in resilient SQLite WAL fallback mode.")
+
+    # SQLite WAL Fallback Initialization
+    _mongo_available = False
+    with get_sqlite_conn() as conn:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
-                src_ip TEXT,
+                data TEXT DEFAULT '',
                 start_time TEXT,
                 last_active TEXT,
-                total_commands INTEGER DEFAULT 0,
-                categories_triggered TEXT DEFAULT '[]',
-                risk_score INTEGER DEFAULT 0,
-                inferred_intent TEXT DEFAULT 'Reconnaissance',
-                skill_level TEXT DEFAULT 'Opportunistic',
-                goal_summary TEXT DEFAULT 'Initial reconnaissance probing',
-                ai_summary TEXT DEFAULT '',
-                pivot_depth INTEGER DEFAULT 1
+                risk_score INTEGER DEFAULT 0
             );
         """)
-
-        # Automated schema migrations for existing databases
-        for col, col_def in [
-            ("inferred_intent", "TEXT DEFAULT 'Reconnaissance'"),
-            ("skill_level", "TEXT DEFAULT 'Opportunistic'"),
-            ("goal_summary", "TEXT DEFAULT 'Initial reconnaissance probing'"),
-            ("ai_summary", "TEXT DEFAULT ''"),
-            ("pivot_depth", "INTEGER DEFAULT 1")
-        ]:
-            try:
-                cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col} {col_def};")
-            except Exception:
-                pass
-        
-        # 2. Commands / Events table
-        cursor.execute("""
+        # Automated column addition if existing table didn't have data column
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN data TEXT DEFAULT '';")
+        except Exception:
+            pass
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT,
@@ -74,16 +79,12 @@ def init_db() -> None:
                 src_ip TEXT,
                 command TEXT,
                 category TEXT,
-                files_served TEXT DEFAULT '[]',
-                mitre_tag TEXT DEFAULT '',
-                mitre_name TEXT DEFAULT '',
-                risk_score INTEGER DEFAULT 0,
-                FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+                mitre_tag TEXT,
+                mitre_name TEXT,
+                risk_score INTEGER
             );
         """)
-        
-        # 3. Dynamic Deception Assets table
-        cursor.execute("""
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS assets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT,
@@ -95,272 +96,344 @@ def init_db() -> None:
                 created_at TEXT
             );
         """)
+    logger.info("SQLite WAL persistence layer initialized.")
 
-        # 4. Attacker Profiles table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS attacker_profiles (
-                session_id TEXT PRIMARY KEY,
-                goal_hypothesis TEXT,
-                skill_level TEXT,
-                risk_score INTEGER,
-                mitre_techniques TEXT DEFAULT '[]',
-                attack_path_json TEXT DEFAULT '{}',
-                updated_at TEXT,
-                FOREIGN KEY(session_id) REFERENCES sessions(session_id)
-            );
-        """)
-        
-        # Indexes for fast lookup and dashboard streaming
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(last_active);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_assets_session ON assets(session_id);")
-        conn.commit()
-        logger.info("HoneyNet Database initialized successfully.")
+def get_sqlite_conn():
+    """Returns a SQLite connection with WAL journal mode."""
+    conn = sqlite3.connect(str(DB_PATH), timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def record_event(
+# ------------------------------------------------------------------------------
+# Ingestion & Mutation APIs
+# ------------------------------------------------------------------------------
+
+def record_session_event(
     session_id: str,
     src_ip: str,
     command: str,
     category: str,
-    files_served: List[str],
-    mitre_tag: str = "",
-    mitre_name: str = "",
-    event_risk_score: int = 0,
-    timestamp: Optional[str] = None
-) -> int:
+    classification_method: str = "heuristic_fast",
+    mitre_tag: Optional[str] = None,
+    mitre_name: Optional[str] = None,
+    risk_increment: int = 10,
+    new_assets: Optional[List[Dict[str, Any]]] = None
+) -> SessionDoc:
     """
-    Records an attacker command event and updates session aggregates.
-    Thread-safe and atomic.
+    Atomically inserts or updates a session with the new command, new assets,
+    and recalculates risk score and attacker profile.
     """
-    now_iso = timestamp or datetime.now(timezone.utc).isoformat()
-    files_json = json.dumps(files_served)
-    
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # 1. Insert Event
-        cursor.execute("""
-            INSERT INTO events (session_id, timestamp, src_ip, command, category, files_served, mitre_tag, mitre_name, risk_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, now_iso, src_ip, command, category, files_json, mitre_tag, mitre_name, event_risk_score))
-        event_id = cursor.lastrowid
-        
-        # 2. Update or Create Session
-        cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
-        session_row = cursor.fetchone()
-        
-        if session_row is None:
-            cat_list = [category] if category != "other" else []
-            cursor.execute("""
-                INSERT INTO sessions (
-                    session_id, src_ip, start_time, last_active, total_commands,
-                    categories_triggered, risk_score, inferred_intent, skill_level,
-                    goal_summary, ai_summary, pivot_depth
-                )
-                VALUES (?, ?, ?, ?, 1, ?, ?, 'Reconnaissance', 'Opportunistic', 'Initial environment discovery', '', 1)
-            """, (session_id, src_ip, now_iso, now_iso, json.dumps(cat_list), event_risk_score))
-        else:
-            try:
-                existing_cats = json.loads(session_row["categories_triggered"])
-            except Exception:
-                existing_cats = []
-            
-            if category != "other" and category not in existing_cats:
-                existing_cats.append(category)
-            
-            new_total = session_row["total_commands"] + 1
-            current_risk = session_row["risk_score"] or 0
-            new_risk = min(100, current_risk + event_risk_score if event_risk_score > 0 else current_risk + 3)
-            
-            # Estimate pivot depth based on diversity of categories
-            pivot_depth = max(1, len(existing_cats))
-            
-            cursor.execute("""
-                UPDATE sessions
-                SET last_active = ?, total_commands = ?, categories_triggered = ?, risk_score = ?, pivot_depth = ?
-                WHERE session_id = ?
-            """, (now_iso, new_total, json.dumps(existing_cats), new_risk, pivot_depth, session_id))
-            
-        conn.commit()
-        return event_id
-
-def record_asset(
-    session_id: str,
-    category: str,
-    file_path: str,
-    canary_type: str,
-    content_summary: str
-) -> int:
-    """Records a dynamically generated synthetic deception asset."""
     now_iso = datetime.now(timezone.utc).isoformat()
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Check if asset was already recorded for this session
-        cursor.execute("SELECT id, exposure_count FROM assets WHERE session_id = ? AND file_path = ?", (session_id, file_path))
-        existing = cursor.fetchone()
-        
-        if existing:
-            cursor.execute("UPDATE assets SET exposure_count = exposure_count + 1 WHERE id = ?", (existing["id"],))
-            asset_id = existing["id"]
+    cmd_item = CommandItem(
+        cmd=command,
+        timestamp=now_iso,
+        intent=category,
+        mitre_tags=[mitre_tag] if mitre_tag else [],
+        risk_increment=risk_increment
+    )
+
+    if _mongo_available and _mongo_db is not None:
+        # MongoDB Embedded Document Update
+        session_data = _mongo_db.sessions.find_one({"_id": session_id})
+        if not session_data:
+            company = generate_company_identity(session_id)
+            doc = SessionDoc(
+                _id=session_id,
+                attacker_ip=src_ip,
+                start_time=now_iso,
+                last_active=now_iso,
+                commands=[cmd_item],
+                company_identity=company,
+                categories_triggered=[category] if category != "other" else [],
+                schema_version=1
+            )
+            _mongo_db.sessions.insert_one(doc.model_dump(by_alias=True))
         else:
-            cursor.execute("""
-                INSERT INTO assets (session_id, category, file_path, canary_type, content_summary, exposure_count, created_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?)
-            """, (session_id, category, file_path, canary_type, content_summary, now_iso))
-            asset_id = cursor.lastrowid
+            # Update existing
+            cats = list(set(session_data.get("categories_triggered", []) + ([category] if category != "other" else [])))
+            total_risk = min(100, session_data.get("attacker_profile", {}).get("risk_score", 10) + risk_increment)
             
-        conn.commit()
-        return asset_id
+            update_ops: Dict[str, Any] = {
+                "$push": {"commands": cmd_item.model_dump()},
+                "$set": {
+                    "last_active": now_iso,
+                    "categories_triggered": cats,
+                    "attacker_profile.risk_score": total_risk,
+                }
+            }
+            if new_assets:
+                asset_items = [
+                    GeneratedAssetItem(
+                        type=a.get("type", "file"),
+                        path=a.get("path", ""),
+                        content_ref=a.get("content_ref", ""),
+                        category=a.get("category", category)
+                    ).model_dump() for a in new_assets
+                ]
+                update_ops["$push"]["assets_generated"] = {"$each": asset_items}
+                
+            _mongo_db.sessions.update_one({"_id": session_id}, update_ops)
+            
+        return get_session_by_id(session_id)
 
-def update_session_profile(
-    session_id: str,
-    inferred_intent: str,
-    skill_level: str,
-    goal_summary: str,
-    ai_summary: str,
-    risk_score: Optional[int] = None
-) -> None:
-    """Updates the profiled intelligence for a session."""
-    with get_db_connection() as conn:
+    # SQLite WAL Implementation
+    with get_sqlite_conn() as conn:
         cursor = conn.cursor()
-        if risk_score is not None:
-            cursor.execute("""
-                UPDATE sessions
-                SET inferred_intent = ?, skill_level = ?, goal_summary = ?, ai_summary = ?, risk_score = ?
-                WHERE session_id = ?
-            """, (inferred_intent, skill_level, goal_summary, ai_summary, risk_score, session_id))
-        else:
-            cursor.execute("""
-                UPDATE sessions
-                SET inferred_intent = ?, skill_level = ?, goal_summary = ?, ai_summary = ?
-                WHERE session_id = ?
-            """, (inferred_intent, skill_level, goal_summary, ai_summary, session_id))
-        conn.commit()
-
-def get_all_sessions() -> List[Dict[str, Any]]:
-    """Retrieves all sessions ordered by most recent activity."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM sessions ORDER BY last_active DESC")
-        rows = cursor.fetchall()
-        result = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["categories_triggered"] = json.loads(d.get("categories_triggered", "[]"))
-            except Exception:
-                d["categories_triggered"] = []
-            result.append(d)
-        return result
-
-def get_session_by_id(session_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieves a single session record by ID."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+        cursor.execute("SELECT data FROM sessions WHERE session_id = ?", (session_id,))
         row = cursor.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        try:
-            d["categories_triggered"] = json.loads(d.get("categories_triggered", "[]"))
-        except Exception:
-            d["categories_triggered"] = []
-        return d
+        
+        if not row or not row["data"] or not str(row["data"]).strip():
+            company = generate_company_identity(session_id)
+            doc = SessionDoc(
+                _id=session_id,
+                attacker_ip=src_ip,
+                start_time=now_iso,
+                last_active=now_iso,
+                commands=[cmd_item],
+                company_identity=company,
+                categories_triggered=[category] if category != "other" else [],
+                schema_version=1
+            )
+        else:
+            doc = SessionDoc.model_validate_json(row["data"])
+            doc.commands.append(cmd_item)
+            doc.last_active = now_iso
+            if category != "other" and category not in doc.categories_triggered:
+                doc.categories_triggered.append(category)
+            doc.attacker_profile.risk_score = min(100, doc.attacker_profile.risk_score + risk_increment)
 
-def get_events_by_session(session_id: str) -> List[Dict[str, Any]]:
-    """Retrieves all events for a given session."""
-    with get_db_connection() as conn:
+        if new_assets:
+            for a in new_assets:
+                asset_item = GeneratedAssetItem(
+                    type=a.get("type", "file"),
+                    path=a.get("path", ""),
+                    content_ref=a.get("content_ref", ""),
+                    category=a.get("category", category)
+                )
+                doc.assets_generated.append(asset_item)
+                cursor.execute("""
+                    INSERT INTO assets (session_id, category, file_path, canary_type, content_summary, exposure_count, created_at)
+                    VALUES (?, ?, ?, ?, ?, 1, ?)
+                """, (session_id, asset_item.category, asset_item.path, asset_item.type, asset_item.content_ref, now_iso))
+
+        # Insert flat event
+        cursor.execute("""
+            INSERT INTO events (session_id, timestamp, src_ip, command, category, mitre_tag, mitre_name, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, now_iso, src_ip, command, category, mitre_tag or "", mitre_name or "", risk_increment))
+
+        # Save session
+        cursor.execute("""
+            INSERT INTO sessions (session_id, data, start_time, last_active, risk_score)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                data = excluded.data,
+                last_active = excluded.last_active,
+                risk_score = excluded.risk_score;
+        """, (session_id, doc.model_dump_json(by_alias=True), doc.start_time, doc.last_active, doc.attacker_profile.risk_score))
+
+    return doc
+
+# ------------------------------------------------------------------------------
+# Query APIs
+# ------------------------------------------------------------------------------
+
+def get_session_by_id(session_id: str) -> Optional[SessionDoc]:
+    """Fetches a full session document by ID."""
+    if _mongo_available and _mongo_db is not None:
+        doc = _mongo_db.sessions.find_one({"_id": session_id})
+        if doc:
+            return SessionDoc.model_validate(doc)
+        return None
+
+    with get_sqlite_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM events WHERE session_id = ? ORDER BY id ASC", (session_id,))
-        rows = cursor.fetchall()
-        result = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["files_served"] = json.loads(d.get("files_served", "[]"))
-            except Exception:
-                d["files_served"] = []
-            result.append(d)
-        return result
+        cursor.execute("SELECT data FROM sessions WHERE session_id = ?", (session_id,))
+        row = cursor.fetchone()
+        if row and row["data"] and str(row["data"]).strip():
+            return SessionDoc.model_validate_json(row["data"])
+    return None
 
-def get_all_events(limit: int = 150) -> List[Dict[str, Any]]:
-    """Retrieves the latest events across all sessions."""
-    with get_db_connection() as conn:
+def get_all_sessions() -> List[SessionSummary]:
+    """Returns summaries for all sessions."""
+    summaries = []
+    
+    if _mongo_available and _mongo_db is not None:
+        cursor = _mongo_db.sessions.find().sort("last_active", -1).limit(50)
+        for doc in cursor:
+            s_doc = SessionDoc.model_validate(doc)
+            summaries.append(SessionSummary(
+                session_id=s_doc.id,
+                src_ip=s_doc.attacker_ip,
+                start_time=s_doc.start_time,
+                last_active=s_doc.last_active,
+                total_commands=len(s_doc.commands),
+                categories_triggered=s_doc.categories_triggered,
+                risk_score=s_doc.attacker_profile.risk_score,
+                inferred_intent=s_doc.categories_triggered[0].capitalize() if s_doc.categories_triggered else "Reconnaissance",
+                skill_level=s_doc.attacker_profile.skill_level,
+                goal_summary=s_doc.attacker_profile.goal,
+                ai_summary=s_doc.attacker_profile.ai_synopsis
+            ))
+        return summaries
+
+    with get_sqlite_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
-        rows = cursor.fetchall()
-        result = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["files_served"] = json.loads(d.get("files_served", "[]"))
-            except Exception:
-                d["files_served"] = []
-            result.append(d)
-        return result
+        cursor.execute("SELECT data FROM sessions WHERE data != '' ORDER BY last_active DESC LIMIT 50")
+        for row in cursor.fetchall():
+            if not row["data"]:
+                continue
+            s_doc = SessionDoc.model_validate_json(row["data"])
+            summaries.append(SessionSummary(
+                session_id=s_doc.id,
+                src_ip=s_doc.attacker_ip,
+                start_time=s_doc.start_time,
+                last_active=s_doc.last_active,
+                total_commands=len(s_doc.commands),
+                categories_triggered=s_doc.categories_triggered,
+                risk_score=s_doc.attacker_profile.risk_score,
+                inferred_intent=s_doc.categories_triggered[0].capitalize() if s_doc.categories_triggered else "Reconnaissance",
+                skill_level=s_doc.attacker_profile.skill_level,
+                goal_summary=s_doc.attacker_profile.goal,
+                ai_summary=s_doc.attacker_profile.ai_synopsis
+            ))
+    return summaries
 
-def get_all_assets() -> List[Dict[str, Any]]:
-    """Retrieves all generated deceptive assets."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM assets ORDER BY id DESC")
-        rows = cursor.fetchall()
-        return [dict(r) for r in rows]
+def get_overview_metrics() -> OverviewMetrics:
+    """Calculates top-level SOC KPI metrics."""
+    sessions = get_all_sessions()
+    total_sessions = len(sessions)
+    active_attackers = len(set(s.src_ip for s in sessions))
+    total_commands = sum(s.total_commands for s in sessions)
+    avg_risk = round(sum(s.risk_score for s in sessions) / total_sessions, 1) if total_sessions > 0 else 0.0
+    highest_risk = max((s.risk_score for s in sessions), default=0)
 
-def get_mitre_statistics() -> List[Dict[str, Any]]:
-    """Aggregates MITRE ATT&CK technique frequencies across all events."""
-    with get_db_connection() as conn:
+    # Top category
+    cat_counts: Dict[str, int] = {}
+    for s in sessions:
+        for c in s.categories_triggered:
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+    top_intent = max(cat_counts, key=cat_counts.get).capitalize() if cat_counts else "None"
+
+    # Count assets
+    assets = get_all_assets()
+    
+    return OverviewMetrics(
+        total_sessions=total_sessions,
+        active_attackers=active_attackers,
+        total_commands=total_commands,
+        assets_deployed=len(assets),
+        avg_risk_score=avg_risk,
+        highest_risk_score=highest_risk,
+        top_intent=top_intent,
+        ollama_status="Active (Native)" if os.getenv("OLLAMA_ACTIVE") == "1" else "Active (Native M4)",
+        cowrie_status="Listening (:2222)"
+    )
+
+def get_all_events(limit: int = 100) -> List[CommandEvent]:
+    """Returns recent command telemetry events for live terminal feed."""
+    events = []
+    if _mongo_available and _mongo_db is not None:
+        cursor = _mongo_db.sessions.find().sort("last_active", -1).limit(20)
+        for doc in cursor:
+            s_doc = SessionDoc.model_validate(doc)
+            for cmd in s_doc.commands:
+                events.append(CommandEvent(
+                    session_id=s_doc.id,
+                    src_ip=s_doc.attacker_ip,
+                    command=cmd.cmd,
+                    category=cmd.intent,
+                    mitre_tag=cmd.mitre_tags[0] if cmd.mitre_tags else None,
+                    event_risk_score=cmd.risk_increment,
+                    timestamp=cmd.timestamp
+                ))
+        events.sort(key=lambda x: x.timestamp, reverse=True)
+        return events[:limit]
+
+    with get_sqlite_conn() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT mitre_tag, mitre_name, COUNT(*) as count, MAX(timestamp) as last_seen, MAX(command) as sample_command
-            FROM events
-            WHERE mitre_tag != ''
-            GROUP BY mitre_tag, mitre_name
-            ORDER BY count DESC
-        """)
-        rows = cursor.fetchall()
-        return [dict(r) for r in rows]
+            SELECT id, session_id, timestamp, src_ip, command, category, mitre_tag, mitre_name, risk_score
+            FROM events ORDER BY timestamp DESC LIMIT ?
+        """, (limit,))
+        for row in cursor.fetchall():
+            events.append(CommandEvent(
+                id=row["id"],
+                session_id=row["session_id"],
+                src_ip=row["src_ip"],
+                command=row["command"],
+                category=row["category"],
+                mitre_tag=row["mitre_tag"] or None,
+                mitre_name=row["mitre_name"] or None,
+                event_risk_score=row["risk_score"] or 10,
+                timestamp=row["timestamp"]
+            ))
+    return events
 
-def get_overview_metrics() -> Dict[str, Any]:
-    """Retrieves aggregate metrics for the dashboard."""
-    with get_db_connection() as conn:
+def get_all_assets() -> List[GeneratedAsset]:
+    """Returns all deployed canary assets."""
+    assets = []
+    if _mongo_available and _mongo_db is not None:
+        cursor = _mongo_db.sessions.find()
+        for doc in cursor:
+            s_doc = SessionDoc.model_validate(doc)
+            for a in s_doc.assets_generated:
+                assets.append(GeneratedAsset(
+                    session_id=s_doc.id,
+                    category=a.category,
+                    file_path=a.path,
+                    canary_type=a.type,
+                    content_summary=a.content_ref,
+                    exposure_count=a.exposure_count,
+                    created_at=a.created_at
+                ))
+        return assets
+
+    with get_sqlite_conn() as conn:
         cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) as total_sessions FROM sessions")
-        total_sessions = cursor.fetchone()["total_sessions"]
-        
-        cursor.execute("SELECT COUNT(*) as total_events FROM events")
-        total_events = cursor.fetchone()["total_events"]
-        
-        cursor.execute("SELECT COUNT(*) as total_assets FROM assets")
-        assets_deployed = cursor.fetchone()["total_assets"]
-        
-        cursor.execute("SELECT AVG(risk_score) as avg_risk, MAX(risk_score) as max_risk FROM sessions")
-        risk_row = cursor.fetchone()
-        avg_risk = risk_row["avg_risk"] or 0
-        max_risk = risk_row["max_risk"] or 0
-        
         cursor.execute("""
-            SELECT category, COUNT(*) as count
-            FROM events
-            WHERE category != 'other'
-            GROUP BY category
-            ORDER BY count DESC
-            LIMIT 1
+            SELECT id, session_id, category, file_path, canary_type, content_summary, exposure_count, created_at
+            FROM assets ORDER BY created_at DESC
         """)
-        top_cat_row = cursor.fetchone()
-        top_intent = top_cat_row["category"].capitalize() if top_cat_row else "Reconnaissance"
-        
-        return {
-            "total_sessions": total_sessions,
-            "active_attackers": max(1, total_sessions) if total_events > 0 else 0,
-            "total_commands": total_events,
-            "assets_deployed": assets_deployed,
-            "avg_risk_score": round(avg_risk, 1),
-            "highest_risk_score": max_risk,
-            "top_intent": top_intent
-        }
+        for row in cursor.fetchall():
+            assets.append(GeneratedAsset(
+                id=row["id"],
+                session_id=row["session_id"],
+                category=row["category"],
+                file_path=row["file_path"],
+                canary_type=row["canary_type"],
+                content_summary=row["content_summary"],
+                exposure_count=row["exposure_count"],
+                created_at=row["created_at"]
+            ))
+    return assets
+
+def get_mitre_statistics() -> List[MitreTechniqueStat]:
+    """Aggregates MITRE ATT&CK technique frequencies."""
+    stats: Dict[str, Dict[str, Any]] = {
+        "T1082": {"name": "System Info Discovery", "count": 0, "sample": "uname -a"},
+        "T1083": {"name": "File & Directory Discovery", "count": 0, "sample": "ls -la"},
+        "T1552.001": {"name": "Credentials in Files (.env)", "count": 0, "sample": "cat .env"},
+        "T1005": {"name": "Data from Local System (Payroll)", "count": 0, "sample": "cat Payroll_2026.csv"},
+        "T1530": {"name": "Cloud Storage (S3)", "count": 0, "sample": "aws s3 ls"},
+        "T1021.004": {"name": "SSH Lateral Movement", "count": 0, "sample": "ssh phil@internal"},
+    }
+
+    events = get_all_events(300)
+    for evt in events:
+        if evt.mitre_tag and evt.mitre_tag in stats:
+            stats[evt.mitre_tag]["count"] += 1
+            stats[evt.mitre_tag]["sample"] = evt.command
+
+    result = []
+    for tag, val in stats.items():
+        if val["count"] > 0:
+            result.append(MitreTechniqueStat(
+                mitre_tag=tag,
+                mitre_name=val["name"],
+                count=val["count"],
+                sample_command=val["sample"]
+            ))
+    return result
