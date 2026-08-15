@@ -1,19 +1,19 @@
 import { z } from "zod";
 
 export const CommandEventSchema = z.object({
-  id: z.number().optional().nullable(),
+  id: z.number().nullish(),
   session_id: z.string(),
   src_ip: z.string(),
   command: z.string(),
   category: z.string().default("other"),
-  classification_method: z.string().optional(),
+  classification_method: z.string().nullish(),
   files_served: z.array(z.string()).default([]),
-  mitre_tag: z.string().optional().nullable(),
-  mitre_name: z.string().optional().nullable(),
+  mitre_tag: z.string().nullish(),
+  mitre_name: z.string().nullish(),
   event_risk_score: z.number().default(10),
-  session_risk_score: z.number().optional(),
-  skill_level: z.string().optional(),
-  inferred_intent: z.string().optional(),
+  session_risk_score: z.number().nullish(),
+  skill_level: z.string().nullish(),
+  inferred_intent: z.string().nullish(),
   timestamp: z.string(),
 });
 

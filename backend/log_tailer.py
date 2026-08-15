@@ -86,7 +86,9 @@ class CowrieLogTailer:
 
         deployed_assets = []
         if category in ("finance", "git", "aws", "hr", "database"):
-            deployed_assets = generate_dynamic_deception_assets(category, session_id, company)
+            already_provisioned = existing_session is not None and category in existing_session.categories_triggered
+            if not already_provisioned:
+                deployed_assets = generate_dynamic_deception_assets(category, session_id, company)
 
         # 3. MITRE ATT&CK Mapping & Risk Scoring
         mitre_tag, mitre_name, risk_score = map_command_to_mitre(command, category)

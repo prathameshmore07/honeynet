@@ -22,12 +22,15 @@ frontend/out/
 frontend/build/
 *.tsbuildinfo
 
-# SQLite Databases & WAL Telemetry Files
+# SQLite & Document Databases, WAL Telemetry, and Mongo Storage
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 honeynet.db
+mongo_data/
+mongo-data/
+data/db/
 
 # Honeypot Runtime Logs & Telemetry Captures
 cowrie_logs/
@@ -41,6 +44,10 @@ cowrie_config/honeyfs/
 .env
 .env.*
 *.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 *.secret
 !.env.example
 !frontend/.env.example

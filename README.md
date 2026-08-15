@@ -15,11 +15,18 @@
 <br/>
 
 <!-- ============================================================================== -->
-<!-- DEMO GIF HERE                                                                  -->
-<!-- Replace the placeholder below with the launch recording GIF/video (demo.gif)  -->
+<!-- FORENSICS SOC DASHBOARD SCREENSHOTS                                           -->
 <!-- ============================================================================== -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/prathameshmore07/honeynet/main/public/demo_preview.png" alt="HoneyNet Forensics SOC Dashboard Demo" width="880px" style="border-radius: 8px; border: 1px solid #222730; box-shadow: 0 8px 24px rgba(0,0,0,0.6);" onerror="this.src='https://via.placeholder.com/880x480/14171C/4A9EFF?text=HoneyNet+Forensics+SOC+Dashboard+Preview'" />
+  <img src="docs/screenshots/dashboard_hero_attack_graph.png" alt="HoneyNet Forensics SOC Dashboard - Lateral Movement & Threat Dossier" width="100%" style="border-radius: 8px; border: 1px solid #222730; box-shadow: 0 8px 24px rgba(0,0,0,0.6);" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/mitre_matrix_telemetry.png" alt="HoneyNet Telemetry Bus & MITRE ATT&CK Heatmap" width="100%" style="border-radius: 8px; border: 1px solid #222730; box-shadow: 0 8px 24px rgba(0,0,0,0.6);" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/honeytoken_evidence_vault.png" alt="HoneyNet Deception Honeytoken & Evidence Vault" width="100%" style="border-radius: 8px; border: 1px solid #222730; box-shadow: 0 8px 24px rgba(0,0,0,0.6);" />
 </p>
 
 </div>
@@ -35,7 +42,7 @@ Traditional honeypots rely on static fake filesystems. Experienced attackers imm
 ```
 Attacker: "ls -la /home/phil"
 HoneyNet: [Instant Regex Match: Intent = Finance]
-HoneyNet: [Faker Engine -> Seeds "Apex Holdings Ltd." (Tax ID: 88-1928371, Domain: apexholdings.io)]
+HoneyNet: [Faker Engine -> Seeds "Moody-Warren Dynamics" (Tax ID: 74-9803649, Domain: moody-warrendynamics.io)]
 HoneyNet: [openpyxl Engine -> Drops genuine binary Payroll_2026_Confidential.xlsx with 8 executive salaries]
 Attacker: "cat Payroll_2026_Confidential.xlsx" -> Attacker stays engaged; SOC gathers forensic attribution.
 ```
@@ -64,11 +71,11 @@ flowchart TD
         NextJS["Next.js 16 SOC Forensics Dashboard (:3000)<br>React Flow + TanStack Query + Zod"]
     end
 
-    subgraph DockerContainment ["2. Containment Sandbox (< 3GB RAM Total)"]
+    subgraph ContainmentSandbox ["2. Containment Sandbox (< 3GB RAM Total)"]
         Cowrie["Cowrie SSH Honeypot Container<br>Port :2222 | mem_limit: 512m"]
         CowrieLog["cowrie_logs/cowrie.json"]
         
-        MongoDB[("MongoDB 7.0 Document Engine<br>Port :27017 | mem_limit: 1g<br>Single Embedded Document Schema")]
+        MongoDB[("MongoDB 7.0 Document Engine<br>Port :27017 / Cloud Atlas<br>Single Embedded Document Schema")]
         
         subgraph FastAPIBackend ["3. FastAPI Real-Time Deception Engine (mem_limit: 1g)"]
             Tailer["Log Ingestion Tailer (Motor Async)"]
@@ -91,18 +98,46 @@ flowchart TD
 
 ---
 
-## 🚀 Quick Start (3 Commands)
+## 🚀 Quick Start (Copy-Paste)
+
+### Method A: Local Native Mode (Recommended)
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/prathameshmore07/honeynet.git && cd honeynet
+# 1. Start the Cowrie SSH Honeypot
+docker compose up -d cowrie
 
-# 2. Launch the unified platform (FastAPI + Next.js + Cowrie)
-chmod +x start.sh && ./start.sh
+# 2. Start the FastAPI Telemetry Backend
+source .venv/bin/activate
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 3. In another terminal, trigger a realistic attack simulation
-python3 honeypot_sim.py --scenario finance
+# 3. Start the Next.js SOC Dashboard (in another terminal)
+cd frontend && npm run dev
 ```
+
+### Method B: Full-Stack Docker
+
+```bash
+docker compose up -d
+```
+
+---
+
+### 🎯 Test & Trigger an Attack:
+
+1. **Dashboard:** Open **[http://localhost:3000](http://localhost:3000)**
+2. **One-Click Simulation:** Click the blue **`▶ Trigger Simulation`** button in the dashboard $\rightarrow$ Select **"Full Multi-Stage APT Lateral Pivot Chain"** $\rightarrow$ Click **"Run Campaign"**.
+3. **Manual SSH Attack:**
+   ```bash
+   ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost -p 2222
+   # Password: any (e.g. 123456)
+   whoami
+   ls -la /home/phil/finance/
+   cat /home/phil/finance/Payroll_2026_Confidential.xlsx
+   ```
+4. **Open Generated Canary File:**
+   ```bash
+   open cowrie_config/honeyfs/home/phil/finance/Payroll_2026_Confidential.xlsx
+   ```
 
 * 📊 **Forensics Lab SOC Dashboard:** [http://localhost:3000](http://localhost:3000)
 * 🔌 **FastAPI Telemetry Backend:** [http://localhost:8000](http://localhost:8000) (Swagger Docs: `/docs`)

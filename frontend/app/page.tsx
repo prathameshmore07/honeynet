@@ -19,6 +19,7 @@ export default function SOCForensicsDashboard() {
   const queryClient = useQueryClient();
   const [isSimulatorOpen, setIsSimulatorOpen] = useState<boolean>(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [feedSessionFilter, setFeedSessionFilter] = useState<string | null>(null);
   const [localEvents, setLocalEvents] = useState<CommandEvent[]>([]);
 
   // 1. TanStack Query Hooks for Telemetry Data
@@ -68,10 +69,10 @@ export default function SOCForensicsDashboard() {
     }
   }, [sessions, selectedSessionId]);
 
-  // Sync initial events into buffer
+  // Sync initial events into buffer (chronological order for terminal)
   useEffect(() => {
     if (initialEvents.length > 0 && localEvents.length === 0) {
-      setLocalEvents(initialEvents);
+      setLocalEvents([...initialEvents].reverse());
     }
   }, [initialEvents, localEvents.length]);
 
@@ -81,12 +82,12 @@ export default function SOCForensicsDashboard() {
     queryKey: ["attackPath", activeSessionKey],
     queryFn: () => api.getAttackPath(activeSessionKey),
     enabled: true,
-    refetchInterval: 3000,
+    refetchInterval: 4000,
   });
 
-  // 2. Real-time WebSocket Ingestion
+  // 2. Real-time WebSocket Ingestion (Append to bottom of terminal)
   const handleCommandEvent = useCallback((event: CommandEvent) => {
-    setLocalEvents((prev) => [event, ...prev.slice(0, 199)]);
+    setLocalEvents((prev) => [...prev.slice(-199), event]);
   }, []);
 
   const handleRefresh = useCallback(() => {
@@ -159,8 +160,8 @@ export default function SOCForensicsDashboard() {
               <LiveCommandFeed
                 events={localEvents}
                 onClear={() => setLocalEvents([])}
-                selectedSession={selectedSessionId}
-                onSelectSession={(sId) => setSelectedSessionId(sId || null)}
+                selectedSession={feedSessionFilter}
+                onSelectSession={(sId) => setFeedSessionFilter(sId || null)}
               />
             </ErrorBoundary>
           </div>

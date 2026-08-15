@@ -21,7 +21,7 @@ export function LiveCommandFeed({
   const [filterCat, setFilterCat] = useState<string>("all");
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("" );
-  const feedEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const categories = ["all", "finance", "git", "aws", "hr", "database", "other"];
 
@@ -36,9 +36,13 @@ export function LiveCommandFeed({
     return matchesCat && matchesSearch && matchesSession;
   });
 
+  // Only scroll the internal terminal box, NEVER scroll the entire browser window
   useEffect(() => {
-    if (!isPaused && feedEndRef.current) {
-      feedEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (!isPaused && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({
+        top: scrollContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
     }
   }, [events, isPaused]);
 
@@ -126,6 +130,7 @@ export function LiveCommandFeed({
 
       {/* Terminal Live Output */}
       <div
+        ref={scrollContainerRef}
         aria-live="polite"
         className="flex-1 p-3.5 overflow-y-auto text-xs space-y-1.5 bg-[#0B0D10]"
       >
@@ -183,8 +188,6 @@ export function LiveCommandFeed({
           <span className="text-[#4A9EFF]">honeynet-forensics:~$</span>
           <span className="h-3.5 w-1.5 bg-[#4A9EFF] animate-cursor-blink inline-block" />
         </div>
-
-        <div ref={feedEndRef} />
       </div>
     </div>
   );

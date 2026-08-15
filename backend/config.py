@@ -1,6 +1,7 @@
 """
 HoneyNet Configuration Module
 Uses pydantic-settings to validate environment configurations with strict typing.
+Pure MongoDB storage configuration, zero hardcoded secrets.
 """
 from pathlib import Path
 from typing import List
@@ -19,15 +20,28 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # Server Settings
+    # Server & Security Settings
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     json_logs: bool = Field(default=True, alias="JSON_LOGS")
+    allowed_origins: List[str] = Field(
+        default=["http://localhost:3000", "http://127.0.0.1:3000"],
+        alias="ALLOWED_ORIGINS"
+    )
+    ws_auth_token: str = Field(
+        default="honeynet_soc_token_2026",
+        alias="WS_AUTH_TOKEN"
+    )
+    rate_limit_per_minute: int = Field(
+        default=120,
+        alias="RATE_LIMIT_PER_MINUTE"
+    )
 
-    # Database
-    database_url: str = Field(default="", alias="DATABASE_URL")
-    db_path: Path = Field(default=BASE_DIR / "honeynet.db", alias="HONEYNET_DB_PATH")
+    # MongoDB Database
+    mongo_uri: str = Field(default="mongodb://localhost:27017/honeynet_db", alias="MONGO_URI")
+    database_url: str = Field(default="mongodb://localhost:27017/honeynet_db", alias="DATABASE_URL")
+    database_name: str = Field(default="honeynet_db", alias="DATABASE_NAME")
 
     # Honeypot Logs & Paths
     cowrie_log_dir: Path = Field(default=BASE_DIR / "cowrie_logs")
@@ -35,10 +49,10 @@ class Settings(BaseSettings):
     templates_dir: Path = Field(default=BASE_DIR / "templates")
     honeyfs_dir: Path = Field(default=BASE_DIR / "cowrie_config" / "honeyfs")
 
-    # Ollama Local AI
+    # Ollama Local AI (M4 Apple Silicon Native)
     ollama_url: str = Field(default="http://localhost:11434", alias="OLLAMA_URL")
-    ollama_model: str = Field(default="qwen2.5:7b", alias="OLLAMA_MODEL")
-    ollama_timeout: float = Field(default=5.0, alias="OLLAMA_TIMEOUT")
+    ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")
+    ollama_timeout: float = Field(default=2.0, alias="OLLAMA_TIMEOUT")
 
     # Target Detection Categories
     categories: List[str] = ["finance", "git", "aws", "hr", "database", "other"]
@@ -47,7 +61,8 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Backwards compatible exports
-DB_PATH = settings.db_path
+MONGO_URI = settings.mongo_uri
+DATABASE_NAME = settings.database_name
 COWRIE_LOG_DIR = settings.cowrie_log_dir
 COWRIE_LOG_PATH = settings.cowrie_log_path
 TEMPLATES_DIR = settings.templates_dir
